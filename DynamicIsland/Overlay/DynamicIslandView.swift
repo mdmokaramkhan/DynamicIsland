@@ -26,14 +26,16 @@ struct DynamicIslandView: View {
 
     // Keystroke footprint — wider than idle but intentionally compact.
     private let keystrokeSize = CGSize(width: 286, height: 44)
-    private let keystrokeTopRadius: CGFloat = 12
-    private let keystrokeBottomRadius: CGFloat = 16
 
     // Hover footprint — must not exceed `IslandMetrics.panelSize` since
     // the panel clips to its own bounds.
     private let hoverExpandedSize = CGSize(width: 380, height: 90)
-    private let hoverExpandedTopRadius: CGFloat = 10
-    private let hoverExpandedBottomRadius: CGFloat = 22
+
+    // Both expanded modes share the same radius spec so the pill edge looks
+    // identical regardless of which mode triggered the expansion. NotchShape
+    // clamps automatically when the height is smaller (keystroke mode).
+    private let expandedTopRadius: CGFloat = 10
+    private let expandedBottomRadius: CGFloat = 22
 
     private let hoverAnimation = Animation.spring(response: 0.45, dampingFraction: 0.78)
     private let inputExpansionDuration: TimeInterval = 1.5
@@ -99,23 +101,17 @@ struct DynamicIslandView: View {
 
     private var currentTopRadius: CGFloat {
         switch displayMode {
-        case .idle:
-            return collapsedTopRadius
-        case .hoverExpanded:
-            return hoverExpandedTopRadius
-        case .keystrokeExpanded:
-            return keystrokeTopRadius
+        case .idle:              return collapsedTopRadius
+        case .hoverExpanded,
+             .keystrokeExpanded: return expandedTopRadius
         }
     }
 
     private var currentBottomRadius: CGFloat {
         switch displayMode {
-        case .idle:
-            return collapsedBottomRadius
-        case .hoverExpanded:
-            return hoverExpandedBottomRadius
-        case .keystrokeExpanded:
-            return keystrokeBottomRadius
+        case .idle:              return collapsedBottomRadius
+        case .hoverExpanded,
+             .keystrokeExpanded: return expandedBottomRadius
         }
     }
 
@@ -126,9 +122,9 @@ struct DynamicIslandView: View {
         case .hoverExpanded:
             return EdgeInsets(top: 14, leading: 16, bottom: 10, trailing: 16)
         case .keystrokeExpanded:
-            // Symmetric vertical centering; horizontal inset keeps icons off
-            // the curved bottom corners of the notch shape.
-            return EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
+            // Match the hover horizontal inset exactly so content sits the
+            // same distance from the curved edges in both expanded modes.
+            return EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
         }
     }
 
@@ -186,7 +182,7 @@ struct DynamicIslandView: View {
         }
 
         let age = Date().timeIntervalSince(lastKeystrokeAt)
-        return age <= inputExpansionDuration ? token : nil
+        return age <= gsxcsdsadcsaacsainputExpansionDuration ? token : nil
     }
 
     private func keystrokePanel(token: KeystrokeToken) -> some View {
@@ -198,7 +194,6 @@ struct DynamicIslandView: View {
             KeystrokeChipView(token: token)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(5)
     }
 
     @ViewBuilder

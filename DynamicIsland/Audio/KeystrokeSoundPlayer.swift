@@ -22,6 +22,7 @@ import AVFoundation
 import CoreGraphics
 
 final class KeystrokeSoundPlayer {
+    var isEnabled = true
 
     // MARK: - Key code constants
 
@@ -75,6 +76,7 @@ final class KeystrokeSoundPlayer {
     // MARK: - Public API
 
     func play(eventType: CGEventType, event: CGEvent) {
+        guard isEnabled else { return }
         switch eventType {
         case .keyDown:                                      handleKeyDown(event)
         case .keyUp:                                        handleKeyUp(event)
