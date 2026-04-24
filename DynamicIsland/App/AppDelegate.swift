@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let keyboardMonitor = GlobalKeystrokeMonitor()
     private let keystrokeStore = KeystrokePanelStore()
+    private let soundPlayer = KeystrokeSoundPlayer()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon, no app-switcher entry — this is a pure overlay.
@@ -23,7 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         installPanel()
         keyboardMonitor.onEvent = { [weak self] eventType, event in
-            self?.keystrokeStore.process(eventType: eventType, event: event)
+            guard let self else { return }
+            self.keystrokeStore.process(eventType: eventType, event: event)
+            self.soundPlayer.play(eventType: eventType, event: event)
         }
         keyboardMonitor.start()
 

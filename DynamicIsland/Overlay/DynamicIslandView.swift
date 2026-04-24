@@ -134,16 +134,59 @@ struct DynamicIslandView: View {
 
     @ViewBuilder
     private var islandExpandedContent: some View {
-        if displayMode == .keystrokeExpanded, let token = keystrokeStore.lastKeystrokeToken {
+        if displayMode == .keystrokeExpanded, let token = visibleKeystrokeToken {
             keystrokePanel(token: token)
-        } else if let token = keystrokeStore.lastKeystrokeToken, displayMode == .hoverExpanded {
+        } else if let token = visibleKeystrokeToken, displayMode == .hoverExpanded {
             KeystrokeChipView(token: token)
         } else if !keyboardMonitor.fallbackMessage.isEmpty {
             Text(keyboardMonitor.fallbackMessage)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.88))
                 .multilineTextAlignment(.center)
+        } else {
+            welcomeBadge
         }
+    }
+
+    private var welcomeBadge: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Welcome to Dynamic Island")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+            Image(systemName: "waveform.path.ecg")
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(Color.white.opacity(0.95))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.20),
+                            Color.white.opacity(0.10),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                )
+        )
+    }
+
+    private var visibleKeystrokeToken: KeystrokeToken? {
+        guard let token = keystrokeStore.lastKeystrokeToken,
+              let lastKeystrokeAt = keystrokeStore.lastKeystrokeAt else {
+            return nil
+        }
+
+        let age = Date().timeIntervalSince(lastKeystrokeAt)
+        return age <= inputExpansionDuration ? token : nil
     }
 
     private func keystrokePanel(token: KeystrokeToken) -> some View {

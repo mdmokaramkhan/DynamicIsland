@@ -100,7 +100,15 @@ final class GlobalKeystrokeMonitor: ObservableObject {
             return Unmanaged.passUnretained(event)
         }
 
-        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
+        let mask = (1 << CGEventType.keyDown.rawValue)
+                 | (1 << CGEventType.keyUp.rawValue)
+                 | (1 << CGEventType.flagsChanged.rawValue)
+                 | (1 << CGEventType.leftMouseDown.rawValue)
+                 | (1 << CGEventType.leftMouseUp.rawValue)
+                 | (1 << CGEventType.rightMouseDown.rawValue)
+                 | (1 << CGEventType.rightMouseUp.rawValue)
+                 | (1 << CGEventType.otherMouseDown.rawValue)
+                 | (1 << CGEventType.otherMouseUp.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -139,7 +147,10 @@ final class GlobalKeystrokeMonitor: ObservableObject {
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
-        case .keyDown, .flagsChanged:
+        case .keyDown, .keyUp, .flagsChanged,
+             .leftMouseDown, .leftMouseUp,
+             .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp:
             isCapturing = true
             onEvent?(eventType, event)
         default:
