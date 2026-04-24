@@ -12,11 +12,13 @@ import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: IslandPanel?
+    private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon, no app-switcher entry — this is a pure overlay.
         NSApp.setActivationPolicy(.accessory)
 
+        installStatusItem()
         installPanel()
 
         NotificationCenter.default.addObserver(
@@ -32,6 +34,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Panel setup
+
+    private func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            if let image = NSImage(systemSymbolName: "viewfinder.circle.fill", accessibilityDescription: "DynamicIsland") {
+                button.image = image
+            } else {
+                button.title = "DI"
+            }
+            button.toolTip = "DynamicIsland"
+        }
+
+        let menu = NSMenu()
+        menu.addItem(
+            NSMenuItem(
+                title: "Quit DynamicIsland",
+                action: #selector(quitApp),
+                keyEquivalent: "q"
+            )
+        )
+        menu.items.first?.target = self
+        item.menu = menu
+
+        statusItem = item
+    }
 
     private func installPanel() {
         let host = NSHostingView(rootView: DynamicIslandView())
@@ -60,5 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func screenParametersChanged(_ note: Notification) {
         guard let panel, let screen = targetScreen() else { return }
         panel.reposition(on: screen)
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
     }
 }
