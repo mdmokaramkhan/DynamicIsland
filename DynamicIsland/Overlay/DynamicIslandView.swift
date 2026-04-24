@@ -29,7 +29,7 @@ struct DynamicIslandView: View {
 
     // Hover footprint — must not exceed `IslandMetrics.panelSize` since
     // the panel clips to its own bounds.
-    private let hoverExpandedSize = CGSize(width: 380, height: 90)
+    private let hoverExpandedSize = CGSize(width: 380, height: 110)
 
     // Both expanded modes share the same radius spec so the pill edge looks
     // identical regardless of which mode triggered the expansion. NotchShape
@@ -120,7 +120,7 @@ struct DynamicIslandView: View {
         case .idle:
             return EdgeInsets()
         case .hoverExpanded:
-            return EdgeInsets(top: 14, leading: 16, bottom: 10, trailing: 16)
+            return EdgeInsets(top: 24, leading: 16, bottom: 10, trailing: 16)
         case .keystrokeExpanded:
             // Match the hover horizontal inset exactly so content sits the
             // same distance from the curved edges in both expanded modes.
@@ -145,17 +145,30 @@ struct DynamicIslandView: View {
     }
 
     private var welcomeBadge: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .semibold))
-            Text("Welcome to Dynamic Island")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-            Image(systemName: "waveform.path.ecg")
-                .font(.system(size: 11, weight: .semibold))
+        VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Welcome to Dynamic Island")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+
+            Link(destination: URL(string: "https://github.com/mdmokaramkhan")!) {
+                HStack(spacing: 6) {
+                    Image(systemName: "link")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("github.com/mdmokaramkhan")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Color.white.opacity(0.9))
+            }
         }
         .foregroundStyle(Color.white.opacity(0.95))
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(
@@ -182,7 +195,7 @@ struct DynamicIslandView: View {
         }
 
         let age = Date().timeIntervalSince(lastKeystrokeAt)
-        return age <= gsxcsdsadcsaacsainputExpansionDuration ? token : nil
+        return age <= inputExpansionDuration ? token : nil
     }
 
     private func keystrokePanel(token: KeystrokeToken) -> some View {
