@@ -49,4 +49,20 @@ struct SpecialKeyIconMapper {
             return nil
         }
     }
+
+    func orderedModifierMappings(from flags: CGEventFlags) -> [Mapping] {
+        let orderedFlags: [CGEventFlags] = [
+            .maskCommand,
+            .maskShift,
+            .maskAlternate,
+            .maskControl,
+            .maskAlphaShift,
+            .maskSecondaryFn
+        ]
+
+        return orderedFlags.compactMap { flag in
+            guard flags.contains(flag) else { return nil }
+            return mappingForModifier(flag: flag)
+        }
+    }
 }

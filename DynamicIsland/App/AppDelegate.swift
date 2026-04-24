@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: IslandPanel?
     private var statusItem: NSStatusItem?
     private let keyboardMonitor = GlobalKeystrokeMonitor()
-    private let keystrokeStore = KeystrokeStreamStore()
+    private let keystrokeStore = KeystrokePanelStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon, no app-switcher entry — this is a pure overlay.

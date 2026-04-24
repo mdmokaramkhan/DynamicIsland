@@ -11,6 +11,12 @@
 import SwiftUI
 
 struct DynamicIslandView: View {
+    private enum DisplayMode {
+        case idle
+        case hoverExpanded
+        case keystrokeExpanded
+    }
+
     // Collapsed footprint — intentionally a hair smaller than the real
     // MacBook notch (~200 x 32 pt) so the idle pill tucks behind the
     // hardware cutout on notched displays and disappears until hover.
@@ -18,19 +24,25 @@ struct DynamicIslandView: View {
     private let collapsedTopRadius: CGFloat = 10
     private let collapsedBottomRadius: CGFloat = 12
 
-    // Expanded footprint — must not exceed `IslandMetrics.panelSize` since
+    // Keystroke footprint — wider than idle but intentionally compact.
+    private let keystrokeSize = CGSize(width: 286, height: 44)
+    private let keystrokeTopRadius: CGFloat = 12
+    private let keystrokeBottomRadius: CGFloat = 16
+
+    // Hover footprint — must not exceed `IslandMetrics.panelSize` since
     // the panel clips to its own bounds.
-    private let expandedSize = CGSize(width: 380, height: 90)
-    private let expandedTopRadius: CGFloat = 10
-    private let expandedBottomRadius: CGFloat = 22
+    private let hoverExpandedSize = CGSize(width: 380, height: 90)
+    private let hoverExpandedTopRadius: CGFloat = 10
+    private let hoverExpandedBottomRadius: CGFloat = 22
 
     private let hoverAnimation = Animation.spring(response: 0.45, dampingFraction: 0.78)
     private let inputExpansionDuration: TimeInterval = 1.5
 
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
-    @ObservedObject var keystrokeStore: KeystrokeStreamStore
+    @ObservedObject var keystrokeStore: KeystrokePanelStore
     @State private var isHovering = false
     @State private var isExpandedByInput = false
+    @State private var displayMode: DisplayMode = .idle
     @State private var collapseWorkItem: DispatchWorkItem?
 
     var body: some View {
@@ -42,23 +54,25 @@ struct DynamicIslandView: View {
                 NotchShape(topRadius: currentTopRadius,
                            bottomRadius: currentBottomRadius)
                     .fill(Color.black)
-                    .frame(width: currentSize.width,
-                           height: currentSize.height)
 
-                if isExpanded {
+                if displayMode != .idle {
                     islandExpandedContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 14)
-                        .padding(.bottom, 10)
+                        .padding(contentPadding)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
             }
+            // The ZStack is sized to the current island footprint — content is
+            // clipped to the notch shape so nothing bleeds outside the pill.
+            .frame(width: currentSize.width, height: currentSize.height)
+            .clipShape(NotchShape(topRadius: currentTopRadius,
+                                  bottomRadius: currentBottomRadius))
             .onHover { hovering in
                 isHovering = hovering
+                recalculateDisplayMode()
             }
-            .onChange(of: keystrokeStore.tokens) { updatedTokens in
-                guard !updatedTokens.isEmpty else { return }
+            .onChange(of: keystrokeStore.lastKeystrokeToken) { updatedToken in
+                guard updatedToken != nil else { return }
                 triggerInputExpansion()
             }
             .onDisappear {
@@ -69,29 +83,61 @@ struct DynamicIslandView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(hoverAnimation, value: isHovering)
+        .animation(hoverAnimation, value: displayMode)
     }
 
     private var currentSize: CGSize {
-        isExpanded ? expandedSize : collapsedSize
+        switch displayMode {
+        case .idle:
+            return collapsedSize
+        case .hoverExpanded:
+            return hoverExpandedSize
+        case .keystrokeExpanded:
+            return keystrokeSize
+        }
     }
 
     private var currentTopRadius: CGFloat {
-        isExpanded ? expandedTopRadius : collapsedTopRadius
+        switch displayMode {
+        case .idle:
+            return collapsedTopRadius
+        case .hoverExpanded:
+            return hoverExpandedTopRadius
+        case .keystrokeExpanded:
+            return keystrokeTopRadius
+        }
     }
 
     private var currentBottomRadius: CGFloat {
-        isExpanded ? expandedBottomRadius : collapsedBottomRadius
+        switch displayMode {
+        case .idle:
+            return collapsedBottomRadius
+        case .hoverExpanded:
+            return hoverExpandedBottomRadius
+        case .keystrokeExpanded:
+            return keystrokeBottomRadius
+        }
     }
 
-    private var isExpanded: Bool {
-        isHovering || isExpandedByInput
+    private var contentPadding: EdgeInsets {
+        switch displayMode {
+        case .idle:
+            return EdgeInsets()
+        case .hoverExpanded:
+            return EdgeInsets(top: 14, leading: 16, bottom: 10, trailing: 16)
+        case .keystrokeExpanded:
+            // Symmetric vertical centering; horizontal inset keeps icons off
+            // the curved bottom corners of the notch shape.
+            return EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
+        }
     }
 
     @ViewBuilder
     private var islandExpandedContent: some View {
-        if !keystrokeStore.tokens.isEmpty {
-            keystrokeStream
+        if displayMode == .keystrokeExpanded, let token = keystrokeStore.lastKeystrokeToken {
+            keystrokePanel(token: token)
+        } else if let token = keystrokeStore.lastKeystrokeToken, displayMode == .hoverExpanded {
+            KeystrokeChipView(token: token)
         } else if !keyboardMonitor.fallbackMessage.isEmpty {
             Text(keyboardMonitor.fallbackMessage)
                 .font(.system(size: 11, weight: .medium))
@@ -100,37 +146,43 @@ struct DynamicIslandView: View {
         }
     }
 
-    private var keystrokeStream: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(keystrokeStore.tokens) { token in
-                        KeystrokeChipView(token: token)
-                            .id(token.id)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.horizontal, 2)
-            }
-            .onAppear {
-                scrollToLatestChip(with: proxy)
-            }
-            .onChange(of: keystrokeStore.tokens) { _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    scrollToLatestChip(with: proxy)
-                }
-            }
+    private func keystrokePanel(token: KeystrokeToken) -> some View {
+        // Space-between: app icon pinned to the leading edge, keystroke chip
+        // pinned to the trailing edge — both visually inside the island.
+        HStack(spacing: 0) {
+            appIconView
+            Spacer(minLength: 8)
+            KeystrokeChipView(token: token)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(5)
+    }
+
+    @ViewBuilder
+    private var appIconView: some View {
+        if let appIcon = keystrokeStore.frontmostAppIcon {
+            Image(nsImage: appIcon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 20, height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else {
+            Image(systemName: "app.fill")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.8))
+                .frame(width: 20, height: 20)
         }
     }
 
     private func triggerInputExpansion() {
         isExpandedByInput = true
+        recalculateDisplayMode()
 
         collapseWorkItem?.cancel()
         let workItem = DispatchWorkItem {
             withAnimation(hoverAnimation) {
                 isExpandedByInput = false
+                recalculateDisplayMode()
             }
         }
         collapseWorkItem = workItem
@@ -138,16 +190,21 @@ struct DynamicIslandView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + inputExpansionDuration, execute: workItem)
     }
 
-    private func scrollToLatestChip(with proxy: ScrollViewProxy) {
-        guard let lastId = keystrokeStore.tokens.last?.id else { return }
-        proxy.scrollTo(lastId, anchor: .trailing)
+    private func recalculateDisplayMode() {
+        if isHovering {
+            displayMode = .hoverExpanded
+        } else if isExpandedByInput {
+            displayMode = .keystrokeExpanded
+        } else {
+            displayMode = .idle
+        }
     }
 }
 
 #Preview {
     DynamicIslandView(
         keyboardMonitor: GlobalKeystrokeMonitor(),
-        keystrokeStore: KeystrokeStreamStore()
+        keystrokeStore: KeystrokePanelStore()
     )
         .frame(width: 380, height: 90)
         .background(Color.gray.opacity(0.2))

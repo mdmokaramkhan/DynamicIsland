@@ -30,8 +30,8 @@ struct KeystrokeChipView: View {
 
 #Preview {
     HStack(spacing: 8) {
-        KeystrokeChipView(token: KeystrokeToken(visual: .symbol(name: "command", fallback: "CMD"), source: .modifier))
-        KeystrokeChipView(token: KeystrokeToken(visual: .text("K"), source: .key))
+        KeystrokeChipView(token: KeystrokeToken(visual: .symbol(name: "command", fallback: "CMD"), source: .flagsChanged))
+        KeystrokeChipView(token: KeystrokeToken(visual: .text("K"), source: .keyDown))
     }
     .padding()
     .background(Color.black)
