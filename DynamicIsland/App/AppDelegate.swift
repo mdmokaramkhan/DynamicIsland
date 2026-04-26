@@ -10,12 +10,15 @@
 import AppKit
 import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var panel: IslandPanel?
     private var statusItem: NSStatusItem?
     private var monitorStatusMenuItem: NSMenuItem?
     private var captureToggleMenuItem: NSMenuItem?
     private var soundToggleMenuItem: NSMenuItem?
+    private var mouseClickSoundToggleMenuItem: NSMenuItem?
+    private var comboSoundToggleMenuItem: NSMenuItem?
+    private var comboPackSubmenuItem: NSMenuItem?
     private var isCaptureEnabled = true
     private let keyboardMonitor = GlobalKeystrokeMonitor()
     private let keystrokeStore = KeystrokePanelStore()
@@ -102,6 +105,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateSoundMenuItem()
         menu.addItem(soundToggleItem)
 
+        let mouseClickSoundToggleItem = NSMenuItem(
+            title: "",
+            action: #selector(toggleMouseClickSound),
+            keyEquivalent: ""
+        )
+        mouseClickSoundToggleMenuItem = mouseClickSoundToggleItem
+        updateMouseClickSoundMenuItem()
+        menu.addItem(mouseClickSoundToggleItem)
+
+        let comboSoundToggleItem = NSMenuItem(
+            title: "",
+            action: #selector(toggleComboSound),
+            keyEquivalent: ""
+        )
+        comboSoundToggleItem.target = self
+        comboSoundToggleMenuItem = comboSoundToggleItem
+        updateComboSoundMenuItem()
+
+        let comboPackItem = NSMenuItem(
+            title: "Shortcut combo sound set",
+            action: nil,
+            keyEquivalent: ""
+        )
+        comboPackItem.image = makeBadgeIcon(symbol: "rectangle.stack.fill", backgroundColor: .systemIndigo)
+        comboPackItem.submenu = makeComboPackSubmenu()
+        comboPackSubmenuItem = comboPackItem
+        menu.addItem(comboPackItem)
+
         menu.addItem(.separator())
         menu.addItem(makeGroupHeader(title: "App"))
 
@@ -116,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for menuItem in menu.items where menuItem.action != nil {
             menuItem.target = self
         }
+        menu.delegate = self
         item.menu = menu
 
         statusItem = item
@@ -203,6 +235,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateSoundMenuItem()
     }
 
+    @objc private func toggleMouseClickSound() {
+        soundPlayer.isMouseClickSoundEnabled.toggle()
+        updateMouseClickSoundMenuItem()
+    }
+
+    @objc private func toggleComboSound() {
+        soundPlayer.isComboSoundEnabled.toggle()
+        updateComboSoundMenuItem()
+    }
+
+    @objc private func selectComboPack(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        soundPlayer.applyComboPack(id: id)
+        refreshComboPackMenuCheckmarks()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        soundPlayer.syncMouseClickSoundEnabledWithUserDefaults()
+        soundPlayer.syncComboSoundEnabledWithUserDefaults()
+        updateMouseClickSoundMenuItem()
+        updateComboSoundMenuItem()
+        refreshComboPackMenuCheckmarks()
+    }
+
+    private func refreshComboPackMenuCheckmarks() {
+        guard let submenu = comboPackSubmenuItem?.submenu else { return }
+        let currentId = soundPlayer.activeComboSoundPackID
+        for item in submenu.items {
+            guard let packId = item.representedObject as? String else { continue }
+            item.state = packId == currentId ? .on : .off
+        }
+    }
+
+    private func makeComboPackSubmenu() -> NSMenu {
+        let submenu = NSMenu()
+        if let toggle = comboSoundToggleMenuItem {
+            submenu.addItem(toggle)
+        }
+        submenu.addItem(.separator())
+
+        let currentId = soundPlayer.activeComboSoundPackID
+        for pack in ComboSoundPack.allPacks {
+            let item = NSMenuItem(
+                title: pack.title,
+                action: #selector(selectComboPack(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = pack.id as NSString
+            item.image = comboPackBadgeImage(for: pack)
+            item.state = pack.id == currentId ? .on : .off
+            submenu.addItem(item)
+        }
+
+        return submenu
+    }
+
+    /// Badge icons matching `makeBadgeIcon` used elsewhere in the status menu.
+    private func comboPackBadgeImage(for pack: ComboSoundPack) -> NSImage? {
+        switch pack.id {
+        case "classic":
+            return makeBadgeIcon(symbol: "star.fill", backgroundColor: .systemYellow)
+        case "loadout":
+            return makeBadgeIcon(symbol: "scope", backgroundColor: .systemRed)
+        case "chaos":
+            return makeBadgeIcon(symbol: "theatermasks.fill", backgroundColor: .systemPurple)
+        case "soft":
+            return makeBadgeIcon(symbol: "heart.fill", backgroundColor: .systemPink)
+        case "desi-mix":
+            return makeBadgeIcon(symbol: "globe.asia.australia.fill", backgroundColor: .systemTeal)
+        default:
+            return makeBadgeIcon(symbol: "square.stack.fill", backgroundColor: .systemGray)
+        }
+    }
+
     private func updateSoundMenuItem() {
         guard let soundToggleMenuItem else { return }
         if soundPlayer.isEnabled {
@@ -211,6 +319,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             soundToggleMenuItem.title = "Enable Key Sounds"
             soundToggleMenuItem.image = makeBadgeIcon(symbol: "speaker.slash.fill", backgroundColor: .systemOrange)
+        }
+    }
+
+    private func updateMouseClickSoundMenuItem() {
+        guard let mouseClickSoundToggleMenuItem else { return }
+        if soundPlayer.isMouseClickSoundEnabled {
+            mouseClickSoundToggleMenuItem.title = "Disable Mouse Click Sounds"
+            mouseClickSoundToggleMenuItem.image = makeBadgeIcon(
+                symbol: "cursorarrow.click.2",
+                backgroundColor: .systemGreen
+            )
+        } else {
+            mouseClickSoundToggleMenuItem.title = "Enable Mouse Click Sounds"
+            mouseClickSoundToggleMenuItem.image = makeBadgeIcon(
+                symbol: "cursorarrow.click.2",
+                backgroundColor: .systemOrange
+            )
+        }
+    }
+
+    private func updateComboSoundMenuItem() {
+        guard let comboSoundToggleMenuItem else { return }
+        if soundPlayer.isComboSoundEnabled {
+            comboSoundToggleMenuItem.title = "Disable Shortcut Combo Sounds"
+            comboSoundToggleMenuItem.image = makeBadgeIcon(symbol: "command", backgroundColor: .systemGreen)
+        } else {
+            comboSoundToggleMenuItem.title = "Enable Shortcut Combo Sounds"
+            comboSoundToggleMenuItem.image = makeBadgeIcon(symbol: "command", backgroundColor: .systemOrange)
         }
     }
 
