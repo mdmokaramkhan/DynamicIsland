@@ -60,6 +60,7 @@ private enum IslandChrome {
 
 struct IslandTabView: View {
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
+    @Binding var isComposingTask: Bool
 
     /// Persists across island collapse/expand and app restarts.
     @AppStorage("island.selectedTab") private var selectedTabRaw: String = IslandTab.welcome.rawValue
@@ -68,7 +69,6 @@ struct IslandTabView: View {
         IslandTab(rawValue: selectedTabRaw) ?? .welcome
     }
     @State private var tasks: [IslandTask] = TaskStorage.load()
-    @State private var isAddingTask = false
     @State private var newTaskTitle = ""
     @FocusState private var isInputFocused: Bool
 
@@ -98,6 +98,11 @@ struct IslandTabView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .animation(.easeInOut(duration: 0.2), value: selectedTab)
+        .onChange(of: selectedTabRaw) { _, new in
+            if new != IslandTab.tasks.rawValue, isComposingTask {
+                cancelInput()
+            }
+        }
     }
 
     // MARK: - Tab button
@@ -412,7 +417,7 @@ struct IslandTabView: View {
 
     private var tasksView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if tasks.isEmpty && !isAddingTask {
+            if tasks.isEmpty && !isComposingTask {
                 emptyTasksView
             } else {
                 let pending = tasks.filter { !$0.isCompleted }
@@ -434,7 +439,7 @@ struct IslandTabView: View {
                 }
             }
 
-            if isAddingTask {
+            if isComposingTask {
                 addTaskField
             } else {
                 addTaskButton
@@ -560,7 +565,7 @@ struct IslandTabView: View {
 
     private var addTaskButton: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.18)) { isAddingTask = true }
+            withAnimation(.easeInOut(duration: 0.18)) { isComposingTask = true }
             isInputFocused = true
         } label: {
             HStack(spacing: 8) {
@@ -687,13 +692,13 @@ struct IslandTabView: View {
         }
         TaskStorage.save(tasks)
         newTaskTitle = ""
-        isAddingTask = false
+        isComposingTask = false
         isInputFocused = false
     }
 
     private func cancelInput() {
         newTaskTitle = ""
-        withAnimation(.easeInOut(duration: 0.18)) { isAddingTask = false }
+        withAnimation(.easeInOut(duration: 0.18)) { isComposingTask = false }
         isInputFocused = false
     }
 }

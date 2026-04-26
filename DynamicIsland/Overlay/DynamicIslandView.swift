@@ -54,6 +54,8 @@ struct DynamicIslandView: View {
     let hitState: IslandHitState
     @State private var isHovering = false
     @State private var isExpandedByInput = false
+    /// True while the Tasks "add task" composer is open; keeps the island expanded.
+    @State private var isComposingTask = false
     @State private var displayMode: DisplayMode = .idle
     @State private var collapseWorkItem: DispatchWorkItem?
 
@@ -77,6 +79,9 @@ struct DynamicIslandView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(hoverAnimation, value: displayMode)
+        .onChange(of: isComposingTask) { _, _ in
+            recalculateDisplayMode()
+        }
     }
 
     // MARK: - Island pill
@@ -144,7 +149,10 @@ struct DynamicIslandView: View {
                 .foregroundStyle(Color.white.opacity(0.88))
                 .multilineTextAlignment(.center)
         } else {
-            IslandTabView(keyboardMonitor: keyboardMonitor)
+            IslandTabView(
+                keyboardMonitor: keyboardMonitor,
+                isComposingTask: $isComposingTask
+            )
         }
     }
 
@@ -233,7 +241,9 @@ struct DynamicIslandView: View {
     }
 
     private func recalculateDisplayMode() {
-        if isHovering {
+        if isComposingTask {
+            displayMode = .hoverExpanded
+        } else if isHovering {
             displayMode = .hoverExpanded
         } else if isExpandedByInput {
             displayMode = .keystrokeExpanded
