@@ -10,6 +10,9 @@
 //  The NotchShape is used as a .background so SwiftUI sizes it to
 //  match the content, not the other way around.
 //
+//  Expanded (hover) uses a wide 16∶10–style strip. Idle and keystroke use the
+//  original compact pills — they are not forced to match that aspect ratio.
+//
 
 import SwiftUI
 
@@ -20,25 +23,28 @@ struct DynamicIslandView: View {
         case keystrokeExpanded
     }
 
-    // Collapsed pill — matches the hardware notch footprint
+    // Collapsed + keystroke — original compact sizes (independent of expanded width)
     private let collapsedSize = CGSize(width: 190, height: 30)
     private let collapsedTopRadius: CGFloat = 5
     private let collapsedBottomRadius: CGFloat = 12
 
-    // Compact keystroke-notification pill
-    private let keystrokeWidth: CGFloat = 286
-    private let keystrokeContentHeight: CGFloat = 28   // inner HStack height
+    private let keystrokeWidth: CGFloat = 288
+    private let keystrokeContentHeight: CGFloat = 20
 
-    // Hover-expanded panel — width fixed, height content-driven
-    private let hoverExpandedWidth: CGFloat = 360
+    // Wide hover strip; slightly under the previous 640pt target (~9% trim)
+    private let hoverExpandedWidth: CGFloat = 580
 
-    // How tall the "notch area" at the top of the expanded island is.
-    // This region aligns with the hardware notch and stays black/empty
-    // so content begins *below* the physical notch cutout.
-    private let notchAreaHeight: CGFloat = 36
+    // Band above content that lines up with the camera housing
+    private let notchAreaHeight: CGFloat = 30
 
-    private let expandedTopRadius: CGFloat = 10
-    private let expandedBottomRadius: CGFloat = 22
+    // Radii scaled for a wider sheet (hover)
+    private let expandedTopRadius: CGFloat = 12
+    private let expandedBottomRadius: CGFloat = 26
+
+    // Keystroke strip: more capsule-like; smaller top (wings) so NotchShape
+    // can apply a larger effective bottom corner within the short height
+    private let keystrokePillTopRadius: CGFloat = 5
+    private let keystrokePillBottomRadius: CGFloat = 18
 
     private let hoverAnimation = Animation.spring(response: 0.45, dampingFraction: 0.78)
     private let inputExpansionDuration: TimeInterval = 1.5
@@ -123,8 +129,8 @@ struct DynamicIslandView: View {
         } else if displayMode == .hoverExpanded {
             // Full panel: content is placed below the notch-area spacer
             islandExpandedContent
-                .padding(.horizontal, 16)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 22)
         }
     }
 
@@ -132,18 +138,13 @@ struct DynamicIslandView: View {
 
     @ViewBuilder
     private var islandExpandedContent: some View {
-        if let token = visibleKeystrokeToken {
-            KeystrokeChipView(token: token)
-        } else if !keyboardMonitor.fallbackMessage.isEmpty {
+        if !keyboardMonitor.fallbackMessage.isEmpty {
             Text(keyboardMonitor.fallbackMessage)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.88))
                 .multilineTextAlignment(.center)
         } else {
-            IslandTabView(
-                keyboardMonitor: keyboardMonitor,
-                keystrokeStore: keystrokeStore
-            )
+            IslandTabView(keyboardMonitor: keyboardMonitor)
         }
     }
 
@@ -165,7 +166,7 @@ struct DynamicIslandView: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 20, height: 20)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             Image(systemName: "app.fill")
                 .font(.system(size: 14, weight: .medium))
@@ -186,17 +187,17 @@ struct DynamicIslandView: View {
 
     private var currentTopRadius: CGFloat {
         switch displayMode {
-        case .idle:              return collapsedTopRadius
-        case .hoverExpanded,
-             .keystrokeExpanded: return expandedTopRadius
+        case .idle:                 return collapsedTopRadius
+        case .hoverExpanded:        return expandedTopRadius
+        case .keystrokeExpanded:    return keystrokePillTopRadius
         }
     }
 
     private var currentBottomRadius: CGFloat {
         switch displayMode {
-        case .idle:              return collapsedBottomRadius
-        case .hoverExpanded,
-             .keystrokeExpanded: return expandedBottomRadius
+        case .idle:                 return collapsedBottomRadius
+        case .hoverExpanded:        return expandedBottomRadius
+        case .keystrokeExpanded:    return keystrokePillBottomRadius
         }
     }
 
@@ -212,6 +213,11 @@ struct DynamicIslandView: View {
     }
 
     private func triggerInputExpansion() {
+        // Only pop up the keystroke pill when the island is idle/collapsed.
+        // If it is already visible (hover or a previous keystroke opened it),
+        // there is no need to interrupt the user with a keystroke notification.
+        guard displayMode == .idle else { return }
+
         isExpandedByInput = true
         recalculateDisplayMode()
 
@@ -244,6 +250,6 @@ struct DynamicIslandView: View {
         keystrokeStore: KeystrokePanelStore(),
         hitState: IslandHitState()
     )
-    .frame(width: 500, height: 300)
+    .frame(width: 680, height: 400)
     .background(Color.gray.opacity(0.2))
 }
