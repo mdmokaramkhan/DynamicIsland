@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import Combine
 
 // MARK: - Task model
 
@@ -36,11 +37,15 @@ private enum TaskStorage {
 enum IslandTab: String, CaseIterable {
     case welcome = "Welcome"
     case tasks = "Tasks"
+    case focusPandora = "Focus"
+    case settings = "Settings"
 
     var icon: String {
         switch self {
-        case .welcome: return "sparkles"
-        case .tasks:   return "checkmark.circle"
+        case .welcome:     return "sparkles"
+        case .tasks:       return "checkmark.circle"
+        case .focusPandora: return "hourglass"
+        case .settings:    return "gearshape"
         }
     }
 }
@@ -54,6 +59,16 @@ private enum IslandChrome {
     static let linkAccent = Color(red: 0.45, green: 0.78, blue: 0.95)
     static let heroRing = Color.white.opacity(0.14)
     static let featureWell = Color.white.opacity(0.045)
+}
+
+/// Neutral, minimal styling for the Focus (Pandora) timer — no accent color noise.
+private enum PandoraChrome {
+    static let primary = Color.white.opacity(0.9)
+    static let dim = Color.white.opacity(0.28)
+    static let muted = Color.white.opacity(0.42)
+    static let panel = Color.white.opacity(0.04)
+    static let panelStroke = Color.white.opacity(0.09)
+    static let divider = Color.white.opacity(0.12)
 }
 
 // MARK: - Main view
@@ -72,32 +87,46 @@ struct IslandTabView: View {
     @State private var newTaskTitle = ""
     @FocusState private var isInputFocused: Bool
 
-    private let tabContentHInset: CGFloat = 4
-    private let tabContentBInset: CGFloat = 8
+    // Focus Pandora — focus session timer
+    @State private var focusPandoraMinutes: Int = 25
+    @State private var focusPandoraRemainingSec: Int = 25 * 60
+    @State private var focusPandoraIsRunning: Bool = false
+    @State private var focusPandoraPulse: Bool = false
+
+    // Namespace for the sliding capsule matchedGeometryEffect (boringNotch style)
+    @Namespace private var tabAnimation
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Tab bar — fixed height so the island doesn't jump on switch
-            HStack(spacing: 6) {
-                ForEach(IslandTab.allCases, id: \.self) { tabButton($0) }
-                Spacer()
-            }
-            .frame(height: 26)
+        VStack(alignment: .leading, spacing: 12) {
+            // Icon-only tab bar — top-left, sliding capsule indicator
+            tabBarView
 
-            // Tab content
+            // Tab content — each view has its own transition so SwiftUI can
+            // interpolate the island height as it animates between them.
             ZStack(alignment: .top) {
-                switch selectedTab {
-                case .welcome: welcomeView
-                case .tasks:   tasksView
+                if selectedTab == .welcome {
+                    welcomeView
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                } else if selectedTab == .tasks {
+                    tasksView
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                } else if selectedTab == .focusPandora {
+                    focusPandoraView
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                } else if selectedTab == .settings {
+                    settingsView
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .top)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, tabContentHInset)
-            .padding(.bottom, tabContentBInset)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .animation(.easeInOut(duration: 0.2), value: selectedTab)
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            guard focusPandoraIsRunning, focusPandoraRemainingSec > 0 else { return }
+            focusPandoraRemainingSec -= 1
+            if focusPandoraRemainingSec == 0 { stopFocusPandora() }
+        }
         .onChange(of: selectedTabRaw) { _, new in
             if new != IslandTab.tasks.rawValue, isComposingTask {
                 cancelInput()
@@ -105,40 +134,80 @@ struct IslandTabView: View {
         }
     }
 
-    // MARK: - Tab button
+    // MARK: - Tab bar (boringNotch TabSelectionView style)
 
-    private func tabButton(_ tab: IslandTab) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { selectedTabRaw = tab.rawValue }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(tab.rawValue)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+    private var tabBarView: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(IslandTab.allCases.filter { $0 != .settings }, id: \.self) { tab in
+                    tabIconButton(tab)
+                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .background(
-                Capsule()
-                    .fill(selectedTab == tab
-                          ? Color.white.opacity(0.18)
-                          : Color.white.opacity(0.06))
-            )
-            .overlay(
-                Capsule()
-                    .stroke(
-                        selectedTab == tab
-                        ? Color.white.opacity(0.32)
-                        : Color.white.opacity(0.10),
-                        lineWidth: 1
-                    )
-            )
+            .clipShape(Capsule())
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 0) {
+                tabIconButton(.settings)
+            }
+            .clipShape(Capsule())
+        }
+        .frame(maxWidth: .infinity, minHeight: 26, maxHeight: 26, alignment: .leading)
+    }
+
+    private func tabIconButton(_ tab: IslandTab) -> some View {
+        let isSelected = selectedTab == tab
+        return Button {
+            withAnimation(.smooth) { selectedTabRaw = tab.rawValue }
+        } label: {
+            Image(systemName: tab.icon)
+                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .symbolRenderingMode(.hierarchical)
+                .padding(.horizontal, 13)
+                .frame(height: 26)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(selectedTab == tab
-                         ? Color.white
-                         : Color.white.opacity(0.72))
+        .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.38))
+        .background {
+            if isSelected {
+                Capsule()
+                    .fill(Color.white.opacity(0.13))
+                    .matchedGeometryEffect(id: "tabCapsule", in: tabAnimation)
+            } else {
+                Capsule()
+                    .fill(Color.clear)
+                    .matchedGeometryEffect(id: "tabCapsule", in: tabAnimation)
+                    .hidden()
+            }
+        }
+    }
+
+    private func notchPanelBackground(cornerRadius: CGFloat = 14) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.075),
+                        Color.white.opacity(0.032),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.105), lineWidth: 1)
+            )
+    }
+
+    private func notchSubpanelBackground(cornerRadius: CGFloat = 11) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.white.opacity(0.047))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.082), lineWidth: 1)
+            )
     }
 
     // MARK: - Welcome
@@ -148,27 +217,19 @@ struct IslandTabView: View {
             welcomeHeroBlock
             welcomeFeatureStrip
             welcomeStatusStrip
-            welcomeHintRow
-            welcomeCreatorCard
+            welcomeFooterStrip
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(IslandChrome.featureWell)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        )
+        .background(notchPanelBackground(cornerRadius: 15))
     }
 
     private var welcomeHeroBlock: some View {
         HStack(alignment: .center, spacing: 12) {
             ZStack {
                 Circle()
-                    .stroke(IslandChrome.heroRing, lineWidth: 1.5)
-                    .frame(width: 50, height: 50)
+                    .stroke(IslandChrome.heroRing, lineWidth: 1)
+                    .frame(width: 44, height: 44)
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(
                         LinearGradient(
@@ -180,13 +241,13 @@ struct IslandTabView: View {
                             endPoint: .bottomTrailing
                         )
                     )
-                    .frame(width: 44, height: 44)
+                    .frame(width: 38, height: 38)
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Color.white.opacity(0.22), lineWidth: 1)
                     )
                 Image(systemName: "sparkles.2")
-                    .font(.system(size: 19, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [.white, Color(white: 0.82)],
@@ -216,75 +277,72 @@ struct IslandTabView: View {
                                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
                         )
                 }
-                Text("A lightweight menu-bar companion — glance at keys, sounds, and your task list without leaving your flow.")
+                Text("Menu-bar control for keys, tasks, and focus.")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(IslandChrome.subtext)
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(welcomeStatusColor)
+                    .frame(width: 5, height: 5)
+                Text("Live")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(Color.white.opacity(0.68))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.white.opacity(0.06)))
+            .overlay(Capsule().stroke(Color.white.opacity(0.09), lineWidth: 1))
         }
     }
 
     private var welcomeFeatureStrip: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             welcomeFeatureCell(
                 icon: "keyboard",
-                title: "Keys & sound",
-                subtitle: "Feedback"
+                title: "Keys"
             )
             welcomeFeatureCell(
                 icon: "checklist",
-                title: "Tasks",
-                subtitle: "Quick list"
+                title: "Tasks"
             )
             welcomeFeatureCell(
                 icon: "menubar.rectangle",
-                title: "Top HUD",
-                subtitle: "Always on top"
+                title: "HUD"
+            )
+            welcomeFeatureCell(
+                icon: "timer",
+                title: "Focus"
             )
         }
     }
 
-    private func welcomeFeatureCell(icon: String, title: String, subtitle: String) -> some View {
-        VStack(alignment: .center, spacing: 5) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.07))
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.85))
-                    .symbolRenderingMode(.hierarchical)
-            }
-            .frame(height: 30)
+    private func welcomeFeatureCell(icon: String, title: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.78))
+                .symbolRenderingMode(.hierarchical)
             Text(title)
                 .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Text(subtitle)
-                .font(.system(size: 8, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.38))
+                .foregroundStyle(Color.white.opacity(0.72))
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
-        .padding(.horizontal, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
+        .padding(.horizontal, 7)
+        .background(notchSubpanelBackground(cornerRadius: 10))
     }
 
     private var welcomeStatusStrip: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(welcomeStatusColor)
-                    .frame(width: 6, height: 6)
+                    .frame(width: 5, height: 5)
                     .shadow(color: welcomeStatusColor.opacity(0.5), radius: 3, x: 0, y: 0)
                 Text(keyboardMonitor.statusLine)
                     .font(.system(size: 9, weight: .semibold, design: .rounded))
@@ -298,8 +356,6 @@ struct IslandTabView: View {
                     HStack(spacing: 3) {
                         Text("Open settings")
                             .font(.system(size: 9, weight: .bold, design: .rounded))
-                        Image(systemName: "arrow.right.circle.fill")
-                            .font(.system(size: 10, weight: .semibold))
                     }
                     .foregroundStyle(Color.orange.opacity(0.95))
                 }
@@ -307,16 +363,9 @@ struct IslandTabView: View {
             }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
+        .background(notchSubpanelBackground(cornerRadius: 10))
     }
 
     private var welcomeStatusColor: Color {
@@ -328,83 +377,52 @@ struct IslandTabView: View {
         }
     }
 
-    private var welcomeHintRow: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "lightbulb.fill")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.yellow.opacity(0.7))
-            Text("Hover the bar at the top of the screen to open this panel. The menubar icon has more options.")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.4))
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
+    private var welcomeFooterStrip: some View {
+        HStack(spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    selectedTabRaw = IslandTab.focusPandora.rawValue
+                }
+            } label: {
+                welcomeFooterPill(icon: "timer", title: "Start focus")
+            }
+            .buttonStyle(.plain)
+
+            welcomeCreatorCard
         }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.yellow.opacity(0.04))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.yellow.opacity(0.10), lineWidth: 1)
-        )
     }
 
     private var welcomeCreatorCard: some View {
         Link(destination: URL(string: "https://github.com/mdmokaramkhan")!) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.12),
-                                    Color.white.opacity(0.05),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    Image(systemName: "person.crop.circle")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.7))
-                }
-                .frame(width: 34, height: 34)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Built by")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.4))
-                    Text("mdmokaramkhan on GitHub")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(IslandChrome.linkAccent)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "arrow.up.forward")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.4))
-            }
-            .padding(10)
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            welcomeFooterPill(icon: "person.crop.circle", title: "GitHub", isLink: true)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+
+    private func welcomeFooterPill(icon: String, title: String, isLink: Bool = false) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+            Spacer(minLength: 0)
+            if isLink {
+                Image(systemName: "arrow.up.forward")
+                    .font(.system(size: 8, weight: .bold))
+            }
+        }
+        .foregroundStyle(isLink ? IslandChrome.linkAccent : Color.white.opacity(0.78))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(IslandChrome.cardFill)
+            Capsule()
+                .fill(isLink ? IslandChrome.linkAccent.opacity(0.08) : Color.white.opacity(0.06))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            IslandChrome.linkAccent.opacity(0.25),
-                            IslandChrome.cardStroke,
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
+            Capsule()
+                .stroke(isLink ? IslandChrome.linkAccent.opacity(0.2) : Color.white.opacity(0.1), lineWidth: 1)
         )
     }
 
@@ -413,10 +431,337 @@ struct IslandTabView: View {
         return s.map { "v\($0)" } ?? "v—"
     }
 
+    // MARK: - Settings
+
+    private var settingsView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(Color.white.opacity(0.07))
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.8))
+                }
+                .frame(width: 36, height: 36)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Settings")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.94))
+                    Text("Quick controls for the island")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(IslandChrome.subtext)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Text(appVersionLabel)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.5))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.white.opacity(0.055)))
+            }
+
+            VStack(spacing: 7) {
+                settingsInfoRow(
+                    icon: "keyboard",
+                    title: "Capture",
+                    value: keyboardMonitor.statusLine,
+                    accent: welcomeStatusColor
+                )
+
+                Button {
+                    keyboardMonitor.openAccessibilitySettings()
+                } label: {
+                    settingsInfoRow(
+                        icon: "hand.raised",
+                        title: "Accessibility",
+                        value: accessibilityStatusText,
+                        accent: welcomeStatusColor,
+                        showsArrow: true
+                    )
+                }
+                .buttonStyle(.plain)
+
+                settingsInfoRow(
+                    icon: "timer",
+                    title: "Default focus",
+                    value: "\(focusPandoraMinutes) minutes",
+                    accent: Color.white.opacity(0.55)
+                )
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(notchPanelBackground(cornerRadius: 15))
+    }
+
+    private var accessibilityStatusText: String {
+        switch keyboardMonitor.authorization {
+        case .authorized:
+            return "Allowed"
+        case .missingAccessibility:
+            return "Needs permission"
+        }
+    }
+
+    private func settingsInfoRow(
+        icon: String,
+        title: String,
+        value: String,
+        accent: Color,
+        showsArrow: Bool = false
+    ) -> some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(0.12))
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(accent.opacity(0.92))
+            }
+            .frame(width: 26, height: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.82))
+                Text(value)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(IslandChrome.subtext)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            if showsArrow {
+                Image(systemName: "arrow.up.forward")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.36))
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(notchSubpanelBackground(cornerRadius: 12))
+    }
+
+    // MARK: - Focus Pandora
+
+    private var focusPandoraView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Focus")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .tracking(0.45)
+                Text(focusPandoraIsRunning ? "COUNTING DOWN" : "READY")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(focusPandoraIsRunning ? Color.white.opacity(0.58) : PandoraChrome.muted)
+                    .tracking(0.5)
+                Spacer(minLength: 0)
+                Text("\(focusPandoraMinutes)m")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.5))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.white.opacity(0.055)))
+            }
+
+            HStack(alignment: .center, spacing: 12) {
+                focusPandoraProgressMark
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 5) {
+                        Text("Pandora")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(PandoraChrome.muted)
+                            .tracking(0.4)
+                        Circle()
+                            .fill(focusPandoraIsRunning ? Color.white.opacity(0.72) : PandoraChrome.dim)
+                            .frame(width: 4, height: 4)
+                            .scaleEffect(focusPandoraIsRunning && focusPandoraPulse ? 1.8 : 1)
+                            .opacity(focusPandoraIsRunning && focusPandoraPulse ? 0.45 : 1)
+                    }
+
+                    Text(focusPandoraTimeString)
+                        .font(.system(size: 25, weight: .light, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(
+                            focusPandoraRemainingSec == 0
+                                ? PandoraChrome.dim
+                                : PandoraChrome.primary
+                        )
+                        .contentTransition(.numericText())
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                focusPandoraControlButton(
+                    icon: "arrow.counterclockwise",
+                    size: 12,
+                    label: "Reset timer",
+                    action: resetFocusPandora
+                )
+
+                focusPandoraControlButton(
+                    icon: focusPandoraIsRunning ? "pause.fill" : "play.fill",
+                    size: 17,
+                    label: focusPandoraIsRunning ? "Pause" : "Start",
+                    isPrimary: true,
+                    action: toggleFocusPandora
+                )
+                .scaleEffect(focusPandoraIsRunning && focusPandoraPulse ? 1.06 : 1)
+            }
+            .padding(10)
+            .background(notchSubpanelBackground(cornerRadius: 13))
+
+            HStack(spacing: 5) {
+                ForEach(focusPandoraPresets, id: \.self) { minutes in
+                    focusPandoraPresetChip(minutes: minutes)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(notchPanelBackground(cornerRadius: 15))
+        .animation(
+            focusPandoraIsRunning
+                ? .easeInOut(duration: 0.75).repeatForever(autoreverses: true)
+                : .easeOut(duration: 0.18),
+            value: focusPandoraPulse
+        )
+        .animation(.easeInOut(duration: 0.24), value: focusPandoraRemainingSec)
+    }
+
+    private var focusPandoraPresets: [Int] { [5, 15, 25, 45] }
+
+    private var focusPandoraProgress: CGFloat {
+        guard focusPandoraMinutes > 0 else { return 0 }
+        let total = CGFloat(focusPandoraMinutes * 60)
+        return max(0, min(1, CGFloat(focusPandoraRemainingSec) / total))
+    }
+
+    private var focusPandoraProgressMark: some View {
+        ZStack {
+            Circle()
+                .stroke(PandoraChrome.divider, lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: focusPandoraProgress)
+                .stroke(
+                    PandoraChrome.primary,
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .opacity(focusPandoraRemainingSec == 0 ? 0.25 : 0.9)
+            Image(systemName: focusPandoraIsRunning ? "hourglass" : "timer")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(focusPandoraIsRunning ? PandoraChrome.primary : PandoraChrome.muted)
+                .symbolEffect(.pulse, options: .repeating, value: focusPandoraIsRunning)
+        }
+        .frame(width: 34, height: 34)
+        .scaleEffect(focusPandoraIsRunning && focusPandoraPulse ? 1.04 : 1)
+    }
+
+    private var focusPandoraTimeString: String {
+        let m = focusPandoraRemainingSec / 60
+        let s = focusPandoraRemainingSec % 60
+        return String(format: "%d:%02d", m, s)
+    }
+
+    private func focusPandoraPresetChip(minutes: Int) -> some View {
+        let selected = focusPandoraMinutes == minutes
+        return Button {
+            selectFocusPandoraPreset(minutes)
+        } label: {
+            Text("\(minutes)m")
+                .font(.system(size: 9, weight: selected ? .bold : .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(selected ? PandoraChrome.primary : PandoraChrome.muted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(selected ? Color.white.opacity(0.11) : Color.white.opacity(0.035))
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(selected ? Color.white.opacity(0.2) : Color.white.opacity(0.07), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(minutes) minutes")
+    }
+
+    private func focusPandoraControlButton(
+        icon: String,
+        size: CGFloat,
+        label: String,
+        isPrimary: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: isPrimary ? .semibold : .regular))
+                .foregroundStyle(isPrimary ? PandoraChrome.primary : PandoraChrome.muted)
+                .frame(width: isPrimary ? 34 : 28, height: 30)
+                .background(
+                    Circle()
+                        .fill(isPrimary ? Color.white.opacity(0.1) : Color.white.opacity(0.04))
+                )
+                .overlay(
+                    Circle()
+                        .stroke(isPrimary ? Color.white.opacity(0.18) : Color.white.opacity(0.07), lineWidth: 1)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func toggleFocusPandora() {
+        if focusPandoraRemainingSec == 0, !focusPandoraIsRunning {
+            focusPandoraRemainingSec = focusPandoraMinutes * 60
+        }
+
+        withAnimation(.easeInOut(duration: 0.18)) {
+            focusPandoraIsRunning.toggle()
+            focusPandoraPulse = focusPandoraIsRunning
+        }
+    }
+
+    private func resetFocusPandora() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            focusPandoraIsRunning = false
+            focusPandoraPulse = false
+            focusPandoraRemainingSec = focusPandoraMinutes * 60
+        }
+    }
+
+    private func selectFocusPandoraPreset(_ minutes: Int) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            focusPandoraIsRunning = false
+            focusPandoraPulse = false
+            focusPandoraMinutes = minutes
+            focusPandoraRemainingSec = minutes * 60
+        }
+    }
+
+    private func stopFocusPandora() {
+        withAnimation(.easeOut(duration: 0.18)) {
+            focusPandoraIsRunning = false
+            focusPandoraPulse = false
+        }
+    }
+
     // MARK: - Tasks
 
     private var tasksView: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
+            tasksHeader
+
             if tasks.isEmpty && !isComposingTask {
                 emptyTasksView
             } else {
@@ -446,8 +791,48 @@ struct IslandTabView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 2)
-        .padding(.bottom, 2)
+        .padding(14)
+        .background(notchPanelBackground(cornerRadius: 15))
+    }
+
+    private var tasksHeader: some View {
+        let pendingCount = tasks.filter { !$0.isCompleted }.count
+        let completedCount = tasks.count - pendingCount
+
+        return HStack(alignment: .center, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.white.opacity(0.07))
+                Image(systemName: "checklist")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.76))
+            }
+            .frame(width: 34, height: 34)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tasks")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.94))
+                Text(pendingCount == 0 ? "Nothing pending" : "\(pendingCount) pending")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(IslandChrome.subtext)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 5) {
+                Text("\(tasks.count)")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                Text(completedCount > 0 ? "total" : "items")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.38))
+            }
+            .foregroundStyle(Color.white.opacity(0.7))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.white.opacity(0.055)))
+        }
     }
 
     // MARK: - Task sections
@@ -481,17 +866,14 @@ struct IslandTabView: View {
     // MARK: - Empty state
 
     private var emptyTasksView: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 9) {
             ZStack {
-                Circle()
-                    .stroke(
-                        Color.white.opacity(0.12),
-                        lineWidth: 1
-                    )
-                    .frame(width: 48, height: 48)
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(Color.white.opacity(0.045))
+                    .frame(width: 42, height: 42)
                 Image(systemName: "tray")
-                    .font(.system(size: 18, weight: .light))
-                    .foregroundStyle(Color.white.opacity(0.3))
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.34))
             }
             VStack(spacing: 3) {
                 Text("Your list is clear")
@@ -504,7 +886,8 @@ struct IslandTabView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, 14)
+        .background(notchSubpanelBackground(cornerRadius: 13))
     }
 
     // MARK: - Task row
@@ -546,18 +929,15 @@ struct IslandTabView: View {
             .buttonStyle(.plain)
             .padding(.top, 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(task.isCompleted ? Color.white.opacity(0.04) : Color.white.opacity(0.07))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(task.isCompleted ? Color.white.opacity(0.035) : Color.white.opacity(0.055))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(
-                    task.isCompleted ? Color.white.opacity(0.06) : Color.white.opacity(0.1),
-                    lineWidth: 1
-                )
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(task.isCompleted ? Color.white.opacity(0.055) : Color.white.opacity(0.09), lineWidth: 1)
         )
     }
 
@@ -577,35 +957,9 @@ struct IslandTabView: View {
             }
             .foregroundStyle(Color.white.opacity(0.75))
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.12),
-                                Color.white.opacity(0.05),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.24),
-                                Color.white.opacity(0.08),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-            )
+            .background(notchSubpanelBackground(cornerRadius: 12))
         }
         .buttonStyle(.plain)
     }
@@ -645,25 +999,15 @@ struct IslandTabView: View {
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.09))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.07))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.cyan.opacity(0.25),
-                            Color.white.opacity(0.12),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.cyan.opacity(0.18), lineWidth: 1)
         )
     }
 
