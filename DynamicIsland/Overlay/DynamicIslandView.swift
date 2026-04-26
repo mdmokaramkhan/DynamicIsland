@@ -2,10 +2,13 @@
 //  DynamicIslandView.swift
 //  DynamicIsland
 //
-//  The black notch-shaped view that lives inside the island panel. The
-//  shape animates its size and bottom corner radius on hover while the
-//  subtle top flare stays fixed; the surrounding panel stays pinned to
-//  the expanded bounds so the hover hit-area is stable.
+//  The black notch-shaped view that lives inside the island panel.
+//  Width is mode-specific. Height is:
+//    • idle / keystroke  → fixed (compact pill)
+//    • hover-expanded    → content-driven (island grows to fit)
+//
+//  The NotchShape is used as a .background so SwiftUI sizes it to
+//  match the content, not the other way around.
 //
 
 import SwiftUI
@@ -17,23 +20,23 @@ struct DynamicIslandView: View {
         case keystrokeExpanded
     }
 
-    // Collapsed footprint — intentionally a hair smaller than the real
-    // MacBook notch (~200 x 32 pt) so the idle pill tucks behind the
-    // hardware cutout on notched displays and disappears until hover.
+    // Collapsed pill — matches the hardware notch footprint
     private let collapsedSize = CGSize(width: 190, height: 30)
     private let collapsedTopRadius: CGFloat = 5
     private let collapsedBottomRadius: CGFloat = 12
 
-    // Keystroke footprint — wider than idle but intentionally compact.
-    private let keystrokeSize = CGSize(width: 286, height: 44)
+    // Compact keystroke-notification pill
+    private let keystrokeWidth: CGFloat = 286
+    private let keystrokeContentHeight: CGFloat = 28   // inner HStack height
 
-    // Hover footprint — must not exceed `IslandMetrics.panelSize` since
-    // the panel clips to its own bounds.
-    private let hoverExpandedSize = CGSize(width: 420, height: 110)
+    // Hover-expanded panel — width fixed, height content-driven
+    private let hoverExpandedWidth: CGFloat = 360
 
-    // Both expanded modes share the same radius spec so the pill edge looks
-    // identical regardless of which mode triggered the expansion. NotchShape
-    // clamps automatically when the height is smaller (keystroke mode).
+    // How tall the "notch area" at the top of the expanded island is.
+    // This region aligns with the hardware notch and stays black/empty
+    // so content begins *below* the physical notch cutout.
+    private let notchAreaHeight: CGFloat = 36
+
     private let expandedTopRadius: CGFloat = 10
     private let expandedBottomRadius: CGFloat = 22
 
@@ -42,49 +45,27 @@ struct DynamicIslandView: View {
 
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
     @ObservedObject var keystrokeStore: KeystrokePanelStore
+    let hitState: IslandHitState
     @State private var isHovering = false
     @State private var isExpandedByInput = false
     @State private var displayMode: DisplayMode = .idle
     @State private var collapseWorkItem: DispatchWorkItem?
 
     var body: some View {
-        // Top-anchored so the pill hugs the notch / menu bar regardless of
-        // its current height. The panel itself is already pinned to the top
-        // of the screen.
         VStack(spacing: 0) {
-            ZStack(alignment: .center) {
-                NotchShape(topRadius: currentTopRadius,
-                           bottomRadius: currentBottomRadius)
-                    .fill(Color.black)
-
-                if displayMode != .idle {
-                    islandExpandedContent
-                        .padding(contentPadding)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 1.02)),
-                            removal: .opacity
-
-                        ))
+            islandPill
+                .onHover { hovering in
+                    isHovering = hovering
+                    recalculateDisplayMode()
                 }
-            }
-            // The ZStack is sized to the current island footprint — content is
-            // clipped to the notch shape so nothing bleeds outside the pill.
-            .frame(width: currentSize.width, height: currentSize.height)
-            .clipShape(NotchShape(topRadius: currentTopRadius,
-                                  bottomRadius: currentBottomRadius))
-            .onHover { hovering in
-                isHovering = hovering
-                recalculateDisplayMode()
-            }
-            .onChange(of: keystrokeStore.lastKeystrokeToken) { updatedToken in
-                guard updatedToken != nil else { return }
-                triggerInputExpansion()
-            }
-            .onDisappear {
-                collapseWorkItem?.cancel()
-                collapseWorkItem = nil
-            }
+                .onChange(of: keystrokeStore.lastKeystrokeToken) { updatedToken in
+                    guard updatedToken != nil else { return }
+                    triggerInputExpansion()
+                }
+                .onDisappear {
+                    collapseWorkItem?.cancel()
+                    collapseWorkItem = nil
+                }
 
             Spacer(minLength: 0)
         }
@@ -92,14 +73,114 @@ struct DynamicIslandView: View {
         .animation(hoverAnimation, value: displayMode)
     }
 
-    private var currentSize: CGSize {
+    // MARK: - Island pill
+
+    // The VStack is the layout driver. Width is always constrained by mode.
+    // For idle, height is pinned to collapsedSize.height. For expanded modes,
+    // height is nil so SwiftUI measures the natural content height.
+    @ViewBuilder
+    private var islandPill: some View {
+        VStack(spacing: 0) {
+            // In hover-expanded mode, reserve the top notchAreaHeight of the
+            // island for the hardware notch region (always black, no content).
+            // This pushes all UI below the physical camera/sensor cutout.
+            if displayMode == .hoverExpanded {
+                Color.clear
+                    .frame(height: notchAreaHeight)
+            }
+
+            if displayMode != .idle {
+                islandModeContent
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 1.02, anchor: .top)),
+                        removal: .opacity
+                    ))
+            }
+        }
+        .frame(
+            width: currentWidth,
+            height: displayMode == .idle ? collapsedSize.height : nil
+        )
+        // NotchShape fills whatever size the VStack produces — this is the
+        // key change that makes the island height content-driven.
+        .background(
+            NotchShape(topRadius: currentTopRadius, bottomRadius: currentBottomRadius)
+                .fill(Color.black)
+        )
+        .clipShape(
+            NotchShape(topRadius: currentTopRadius, bottomRadius: currentBottomRadius)
+        )
+    }
+
+    @ViewBuilder
+    private var islandModeContent: some View {
+        if displayMode == .keystrokeExpanded, let token = visibleKeystrokeToken {
+            // Compact pill: icon + keystroke chip, vertically centred
+            keystrokePanel(token: token)
+                .frame(height: keystrokeContentHeight)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+        } else if displayMode == .hoverExpanded {
+            // Full panel: content is placed below the notch-area spacer
+            islandExpandedContent
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+        }
+    }
+
+    // MARK: - Expanded content
+
+    @ViewBuilder
+    private var islandExpandedContent: some View {
+        if let token = visibleKeystrokeToken {
+            KeystrokeChipView(token: token)
+        } else if !keyboardMonitor.fallbackMessage.isEmpty {
+            Text(keyboardMonitor.fallbackMessage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.88))
+                .multilineTextAlignment(.center)
+        } else {
+            IslandTabView(
+                keyboardMonitor: keyboardMonitor,
+                keystrokeStore: keystrokeStore
+            )
+        }
+    }
+
+    // MARK: - Keystroke panel
+
+    private func keystrokePanel(token: KeystrokeToken) -> some View {
+        HStack(spacing: 0) {
+            appIconView
+            Spacer(minLength: 8)
+            KeystrokeChipView(token: token)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var appIconView: some View {
+        if let appIcon = keystrokeStore.frontmostAppIcon {
+            Image(nsImage: appIcon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 20, height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else {
+            Image(systemName: "app.fill")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.8))
+                .frame(width: 20, height: 20)
+        }
+    }
+
+    // MARK: - Mode metrics
+
+    private var currentWidth: CGFloat {
         switch displayMode {
-        case .idle:
-            return collapsedSize
-        case .hoverExpanded:
-            return hoverExpandedSize
-        case .keystrokeExpanded:
-            return keystrokeSize
+        case .idle:               return collapsedSize.width
+        case .hoverExpanded:      return hoverExpandedWidth
+        case .keystrokeExpanded:  return keystrokeWidth
         }
     }
 
@@ -119,117 +200,15 @@ struct DynamicIslandView: View {
         }
     }
 
-    private var contentPadding: EdgeInsets {
-        switch displayMode {
-        case .idle:
-            return EdgeInsets()
-        case .hoverExpanded:
-            return EdgeInsets(top: 24, leading: 16, bottom: 10, trailing: 16)
-        case .keystrokeExpanded:
-            // Match the hover horizontal inset exactly so content sits the
-            // same distance from the curved edges in both expanded modes.
-            return EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
-        }
-    }
-
-    @ViewBuilder
-    private var islandExpandedContent: some View {
-        if displayMode == .keystrokeExpanded, let token = visibleKeystrokeToken {
-            keystrokePanel(token: token)
-        } else if let token = visibleKeystrokeToken, displayMode == .hoverExpanded {
-            KeystrokeChipView(token: token)
-        } else if !keyboardMonitor.fallbackMessage.isEmpty {
-            Text(keyboardMonitor.fallbackMessage)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.88))
-                .multilineTextAlignment(.center)
-        } else {
-            IslandTabView(
-                keyboardMonitor: keyboardMonitor,
-                keystrokeStore: keystrokeStore
-            )
-        }
-    }
-
-    private var welcomeBadge: some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Welcome to Dynamic Island")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                Image(systemName: "waveform.path.ecg")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-
-            Link(destination: URL(string: "https://github.com/mdmokaramkhan")!) {
-                HStack(spacing: 6) {
-                    Image(systemName: "link")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text("github.com/mdmokaramkhan")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(Color.white.opacity(0.9))
-            }
-        }
-        .foregroundStyle(Color.white.opacity(0.95))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.20),
-                            Color.white.opacity(0.10),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                )
-        )
-    }
+    // MARK: - State management
 
     private var visibleKeystrokeToken: KeystrokeToken? {
         guard let token = keystrokeStore.lastKeystrokeToken,
               let lastKeystrokeAt = keystrokeStore.lastKeystrokeAt else {
             return nil
         }
-
         let age = Date().timeIntervalSince(lastKeystrokeAt)
         return age <= inputExpansionDuration ? token : nil
-    }
-
-    private func keystrokePanel(token: KeystrokeToken) -> some View {
-        // Space-between: app icon pinned to the leading edge, keystroke chip
-        // pinned to the trailing edge — both visually inside the island.
-        HStack(spacing: 0) {
-            appIconView
-            Spacer(minLength: 8)
-            KeystrokeChipView(token: token)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    @ViewBuilder
-    private var appIconView: some View {
-        if let appIcon = keystrokeStore.frontmostAppIcon {
-            Image(nsImage: appIcon)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 20, height: 20)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        } else {
-            Image(systemName: "app.fill")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.8))
-                .frame(width: 20, height: 20)
-        }
     }
 
     private func triggerInputExpansion() {
@@ -244,7 +223,6 @@ struct DynamicIslandView: View {
             }
         }
         collapseWorkItem = workItem
-
         DispatchQueue.main.asyncAfter(deadline: .now() + inputExpansionDuration, execute: workItem)
     }
 
@@ -256,14 +234,16 @@ struct DynamicIslandView: View {
         } else {
             displayMode = .idle
         }
+        hitState.isExpanded = displayMode != .idle
     }
 }
 
 #Preview {
     DynamicIslandView(
         keyboardMonitor: GlobalKeystrokeMonitor(),
-        keystrokeStore: KeystrokePanelStore()
+        keystrokeStore: KeystrokePanelStore(),
+        hitState: IslandHitState()
     )
-        .frame(width: 500, height: 120)
-        .background(Color.gray.opacity(0.2))
+    .frame(width: 500, height: 300)
+    .background(Color.gray.opacity(0.2))
 }

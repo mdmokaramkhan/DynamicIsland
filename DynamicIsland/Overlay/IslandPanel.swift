@@ -10,9 +10,14 @@
 import AppKit
 
 enum IslandMetrics {
-    // The panel is sized to the fully-expanded pill so the hit area never
-    // changes; the pill shrinks *inside* the panel on hover-out.
-    static let panelSize = CGSize(width: 420, height: 90)
+    // Panel width matches the widest expanded mode (360 pt content + generous
+    // margins). Height is tall enough for any dynamic content the island can
+    // produce; the visible pill is always smaller — transparent areas are
+    // click-through via the AppDelegate mouse monitor.
+    static let panelSize = CGSize(width: 420, height: 300)
+
+    // Collapsed pill dimensions — must match DynamicIslandView.collapsedSize.
+    static let collapsedSize = CGSize(width: 190, height: 30)
 
     // Horizontal margin kept from the top edge; notch-equipped displays get 0
     // so the pill sits flush with the top of the screen and visually covers
@@ -20,13 +25,34 @@ enum IslandMetrics {
     static let topMarginNoNotch: CGFloat = 0
 }
 
+// MARK: - Hit-state bridge
+
+/// Lightweight mutable reference that SwiftUI writes on every display-mode
+/// change. AppDelegate observes via the callback to toggle the panel's
+/// `ignoresMouseEvents` — the only compositor-level way to allow clicks to
+/// fall through a transparent overlay window to the apps beneath it.
+final class IslandHitState {
+    var isExpanded: Bool = false {
+        didSet {
+            guard isExpanded != oldValue else { return }
+            onExpansionChanged?(isExpanded)
+        }
+    }
+    /// Called on the main thread whenever `isExpanded` flips.
+    var onExpansionChanged: ((Bool) -> Void)?
+}
+
+// MARK: - Panel
+
 final class IslandPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
     static func make(contentView: NSView) -> IslandPanel {
+        let panelRect = NSRect(origin: .zero, size: IslandMetrics.panelSize)
+
         let panel = IslandPanel(
-            contentRect: NSRect(origin: .zero, size: IslandMetrics.panelSize),
+            contentRect: panelRect,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -39,7 +65,9 @@ final class IslandPanel: NSPanel {
         panel.isMovable = false
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
-        panel.ignoresMouseEvents = false
+        // Start fully click-through; AppDelegate's mouse monitor re-enables
+        // interaction only when the cursor enters the collapsed pill area.
+        panel.ignoresMouseEvents = true
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
@@ -47,6 +75,8 @@ final class IslandPanel: NSPanel {
             .ignoresCycle,
         ]
 
+        contentView.frame = panelRect
+        contentView.autoresizingMask = [.width, .height]
         panel.contentView = contentView
         panel.acceptsMouseMovedEvents = true
 
