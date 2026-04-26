@@ -4,7 +4,6 @@ import ApplicationServices
 enum KeyboardCaptureAuthorization: Equatable {
     case authorized
     case missingAccessibility
-    case missingInputMonitoring
 }
 
 struct KeyboardPermissionService {
@@ -13,13 +12,6 @@ struct KeyboardPermissionService {
     func isAccessibilityTrusted(promptIfNeeded: Bool) -> Bool {
         let options = [accessibilityPromptKey: promptIfNeeded] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
-    }
-
-    func openInputMonitoringSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") else {
-            return
-        }
-        NSWorkspace.shared.open(url)
     }
 
     func openAccessibilitySettings() {

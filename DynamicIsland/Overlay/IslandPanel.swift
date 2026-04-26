@@ -12,7 +12,7 @@ import AppKit
 enum IslandMetrics {
     // The panel is sized to the fully-expanded pill so the hit area never
     // changes; the pill shrinks *inside* the panel on hover-out.
-    static let panelSize = CGSize(width: 380, height: 90)
+    static let panelSize = CGSize(width: 420, height: 90)
 
     // Horizontal margin kept from the top edge; notch-equipped displays get 0
     // so the pill sits flush with the top of the screen and visually covers

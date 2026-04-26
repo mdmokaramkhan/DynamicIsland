@@ -20,8 +20,8 @@ struct DynamicIslandView: View {
     // Collapsed footprint — intentionally a hair smaller than the real
     // MacBook notch (~200 x 32 pt) so the idle pill tucks behind the
     // hardware cutout on notched displays and disappears until hover.
-    private let collapsedSize = CGSize(width: 150, height: 30)
-    private let collapsedTopRadius: CGFloat = 10
+    private let collapsedSize = CGSize(width: 190, height: 30)
+    private let collapsedTopRadius: CGFloat = 5
     private let collapsedBottomRadius: CGFloat = 12
 
     // Keystroke footprint — wider than idle but intentionally compact.
@@ -29,7 +29,7 @@ struct DynamicIslandView: View {
 
     // Hover footprint — must not exceed `IslandMetrics.panelSize` since
     // the panel clips to its own bounds.
-    private let hoverExpandedSize = CGSize(width: 380, height: 110)
+    private let hoverExpandedSize = CGSize(width: 420, height: 110)
 
     // Both expanded modes share the same radius spec so the pill edge looks
     // identical regardless of which mode triggered the expansion. NotchShape
@@ -61,7 +61,11 @@ struct DynamicIslandView: View {
                     islandExpandedContent
                         .padding(contentPadding)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 1.02)),
+                            removal: .opacity
+
+                        ))
                 }
             }
             // The ZStack is sized to the current island footprint — content is
@@ -140,7 +144,10 @@ struct DynamicIslandView: View {
                 .foregroundStyle(Color.white.opacity(0.88))
                 .multilineTextAlignment(.center)
         } else {
-            welcomeBadge
+            IslandTabView(
+                keyboardMonitor: keyboardMonitor,
+                keystrokeStore: keystrokeStore
+            )
         }
     }
 
@@ -257,6 +264,6 @@ struct DynamicIslandView: View {
         keyboardMonitor: GlobalKeystrokeMonitor(),
         keystrokeStore: KeystrokePanelStore()
     )
-        .frame(width: 380, height: 90)
+        .frame(width: 500, height: 120)
         .background(Color.gray.opacity(0.2))
 }

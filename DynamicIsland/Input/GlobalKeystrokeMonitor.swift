@@ -19,20 +19,17 @@ final class GlobalKeystrokeMonitor: ObservableObject {
             return isCapturing ? "Keyboard: capturing" : "Keyboard: ready"
         case .missingAccessibility:
             return "Keyboard: Accessibility required"
-        case .missingInputMonitoring:
-            return "Keyboard: Input Monitoring required"
         }
     }
 
     private let permissionService = KeyboardPermissionService()
     private var eventTap: CFMachPort?
     private var eventTapRunLoopSource: CFRunLoopSource?
-    private var fallbackMonitor: Any?
 
     func start() {
         stop()
 
-        // Accessibility can be prompted. Input Monitoring must be enabled by user in Settings.
+        // Accessibility can be prompted directly by the app.
         guard permissionService.isAccessibilityTrusted(promptIfNeeded: true) else {
             authorization = .missingAccessibility
             isCapturing = false
@@ -48,16 +45,9 @@ final class GlobalKeystrokeMonitor: ObservableObject {
             return
         }
 
-        if installFallbackMonitor() {
-            authorization = .missingInputMonitoring
-            fallbackMessage = "Enable Input Monitoring for full global capture."
-            postStatusChange()
-            return
-        }
-
-        authorization = .missingInputMonitoring
+        authorization = .authorized
         isCapturing = false
-        fallbackMessage = "Enable Input Monitoring, then relaunch DynamicIsland."
+        fallbackMessage = "Keyboard capture is unavailable right now. Try restarting DynamicIsland."
         postStatusChange()
     }
 
@@ -72,16 +62,7 @@ final class GlobalKeystrokeMonitor: ObservableObject {
             eventTap = nil
         }
 
-        if let monitor = fallbackMonitor {
-            NSEvent.removeMonitor(monitor)
-            fallbackMonitor = nil
-        }
-
         isCapturing = false
-    }
-
-    func openInputMonitoringSettings() {
-        permissionService.openInputMonitoringSettings()
     }
 
     func openAccessibilitySettings() {
@@ -130,15 +111,6 @@ final class GlobalKeystrokeMonitor: ObservableObject {
         CGEvent.tapEnable(tap: tap, enable: true)
         isCapturing = true
         return true
-    }
-
-    private func installFallbackMonitor() -> Bool {
-        fallbackMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] _ in
-            Task { @MainActor in
-                self?.isCapturing = true
-            }
-        }
-        return fallbackMonitor != nil
     }
 
     private func handleEventTapCallback(eventType: CGEventType, event: CGEvent) {

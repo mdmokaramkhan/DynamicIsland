@@ -82,14 +82,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateCaptureMenuItem()
         menu.addItem(captureToggleItem)
 
-        let inputMonitoringItem = NSMenuItem(
-            title: "Open Input Monitoring Settings",
-            action: #selector(openInputMonitoringSettings),
-            keyEquivalent: ""
-        )
-        inputMonitoringItem.image = makeBadgeIcon(symbol: "keyboard.badge.eye", backgroundColor: .systemIndigo)
-        menu.addItem(inputMonitoringItem)
-
         let accessibilityItem = NSMenuItem(
             title: "Open Accessibility Settings",
             action: #selector(openAccessibilitySettings),
@@ -170,10 +162,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
-    }
-
-    @objc private func openInputMonitoringSettings() {
-        keyboardMonitor.openInputMonitoringSettings()
     }
 
     @objc private func openAccessibilitySettings() {
