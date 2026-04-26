@@ -10,13 +10,10 @@
 import AppKit
 
 enum IslandMetrics {
-    // Panel width matches the widest expanded mode (360 pt content + generous
-    // margins). Height is tall enough for any dynamic content the island can
-    // produce; the visible pill is always smaller — transparent areas are
-    // click-through via the AppDelegate mouse monitor.
-    static let panelSize = CGSize(width: 420, height: 300)
+    // Slightly narrower than 700: matches ~580pt island + ~30pt side margins
+    static let panelSize = CGSize(width: 640, height: 400)
 
-    // Collapsed pill dimensions — must match DynamicIslandView.collapsedSize.
+    // Collapsed pill — must match DynamicIslandView.collapsedSize (click-through).
     static let collapsedSize = CGSize(width: 190, height: 30)
 
     // Horizontal margin kept from the top edge; notch-equipped displays get 0
@@ -45,7 +42,11 @@ final class IslandHitState {
 // MARK: - Panel
 
 final class IslandPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    // Must be true so SwiftUI TextFields inside the island can receive
+    // keyboard input when the user explicitly clicks into them.
+    // The .nonactivatingPanel style mask ensures the panel doesn't
+    // steal focus from other apps on mouse-over — only on explicit click.
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     static func make(contentView: NSView) -> IslandPanel {
