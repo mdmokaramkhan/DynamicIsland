@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let keyboardMonitor = GlobalKeystrokeMonitor()
     private let keystrokeStore = KeystrokePanelStore()
     private let soundPlayer = KeystrokeSoundPlayer()
+    private let hitState = IslandHitState()
+    private var mouseMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon, no app-switcher entry — this is a pure overlay.
@@ -49,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NotificationCenter.default.removeObserver(self)
         keyboardMonitor.stop()
         keyboardMonitor.onEvent = nil
+        if let monitor = mouseMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
     // MARK: - Panel setup
@@ -163,7 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func installPanel() {
         let host = NSHostingView(rootView: DynamicIslandView(
             keyboardMonitor: keyboardMonitor,
-            keystrokeStore: keystrokeStore
+            keystrokeStore: keystrokeStore,
+            hitState: hitState
         ))
         host.frame = NSRect(origin: .zero, size: IslandMetrics.panelSize)
         host.autoresizingMask = [.width, .height]
@@ -176,6 +182,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         panel.orderFrontRegardless()
+
+        // When SwiftUI signals that the island has collapsed back to idle,
+        // re-evaluate whether the panel should ignore mouse events.
+        hitState.onExpansionChanged = { [weak self] _ in
+            self?.updatePanelMouseIgnore()
+        }
+
+        // Start the global mouse monitor that enables the panel when the
+        // cursor enters the pill area and disables it when it leaves.
+        startMouseTracking()
+        updatePanelMouseIgnore()
+    }
+
+    // MARK: - Click-through mouse tracking
+
+    /// Returns the collapsed pill's rect in global screen coordinates
+    /// (AppKit convention: y=0 at bottom of screen).
+    private func pillScreenRect() -> NSRect? {
+        guard let panel else { return nil }
+        let f = panel.frame
+        let pw = IslandMetrics.collapsedSize.width
+        let ph = IslandMetrics.collapsedSize.height
+        // Add a small inset buffer so hover triggers slightly before
+        // the cursor reaches the exact pill edge.
+        return NSRect(
+            x: f.midX - pw / 2 - 10,
+            y: f.maxY - ph - 8,
+            width: pw + 20,
+            height: ph + 8
+        )
+    }
+
+    /// Flips `panel.ignoresMouseEvents` based on current cursor position
+    /// and island expansion state. Safe to call at any frequency.
+    private func updatePanelMouseIgnore() {
+        guard let panel else { return }
+        let over = pillScreenRect()?.contains(NSEvent.mouseLocation) ?? false
+        // Never ignore events while expanded — doing so would prevent
+        // onHover(false) from firing and would freeze the island open.
+        let shouldIgnore = !over && !hitState.isExpanded
+        if panel.ignoresMouseEvents != shouldIgnore {
+            panel.ignoresMouseEvents = shouldIgnore
+        }
+    }
+
+    private func startMouseTracking() {
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
+        ) { [weak self] _ in
+            self?.updatePanelMouseIgnore()
+        }
     }
 
     private func targetScreen() -> NSScreen? {
