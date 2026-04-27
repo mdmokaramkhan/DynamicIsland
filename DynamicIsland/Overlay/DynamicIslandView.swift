@@ -181,7 +181,7 @@ struct DynamicIslandView: View {
         )
         // Idle and compact strip share the same ease; hover keeps the bouncy open spring.
         .animation(modeChangeAnimation, value: displayMode)
-        .animation(.smooth(duration: 0.90), value: selectedTabRaw)
+        .animation(.smooth(duration: 0.32), value: selectedTabRaw)
     }
 
     private var shouldDrawAmbientShadow: Bool {
