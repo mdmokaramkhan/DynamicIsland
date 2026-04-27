@@ -10,7 +10,8 @@
 import AppKit
 
 enum IslandMetrics {
-    // Slightly narrower than 700: matches ~580pt island + ~30pt side margins
+    // Panel width matches boringNotch openNotchSize.width (640pt).
+    // Height is taller than the reference to accommodate the expanded tab panel.
     static let panelSize = CGSize(width: 640, height: 400)
 
     // Collapsed pill — must match DynamicIslandView.collapsedSize (click-through).

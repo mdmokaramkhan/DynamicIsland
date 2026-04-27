@@ -70,57 +70,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         let menu = NSMenu()
+
+        // ── App identity header ──────────────────────────────────────────
+        let appHeaderItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        appHeaderItem.isEnabled = false
+        let headerAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: NSColor.labelColor
+        ]
+        appHeaderItem.attributedTitle = NSAttributedString(string: "DynamicIsland", attributes: headerAttrs)
+        menu.addItem(appHeaderItem)
+
+        // ── Status line ──────────────────────────────────────────────────
         let monitorStatusItem = NSMenuItem(title: keyboardMonitor.statusLine,
                                            action: nil,
                                            keyEquivalent: "")
         monitorStatusItem.isEnabled = false
-        monitorStatusItem.image = makeBadgeIcon(symbol: "info.circle.fill", backgroundColor: .systemBlue)
+        monitorStatusItem.image = makeStatusDot(active: true)
         monitorStatusMenuItem = monitorStatusItem
         menu.addItem(monitorStatusItem)
         menu.addItem(.separator())
 
-        menu.addItem(makeGroupHeader(title: "Monitoring"))
+        // ── Monitoring section ───────────────────────────────────────────
+        menu.addItem(makeSectionHeader("Monitoring"))
 
         let captureToggleItem = NSMenuItem(
-            title: "",
+            title: "Keystroke Capture",
             action: #selector(toggleCapture),
             keyEquivalent: ""
         )
+        captureToggleItem.image = makeMenuIcon(symbol: "keyboard")
         captureToggleMenuItem = captureToggleItem
         updateCaptureMenuItem()
         menu.addItem(captureToggleItem)
 
         let accessibilityItem = NSMenuItem(
-            title: "Open Accessibility Settings",
+            title: "Accessibility Settings",
             action: #selector(openAccessibilitySettings),
             keyEquivalent: ""
         )
-        accessibilityItem.image = makeBadgeIcon(symbol: "figure.wave", backgroundColor: .systemTeal)
+        accessibilityItem.image = makeMenuIcon(symbol: "hand.raised")
         menu.addItem(accessibilityItem)
         menu.addItem(.separator())
 
-        menu.addItem(makeGroupHeader(title: "Sound"))
+        // ── Sounds section ───────────────────────────────────────────────
+        menu.addItem(makeSectionHeader("Sounds"))
 
         let soundToggleItem = NSMenuItem(
-            title: "",
+            title: "Key Sounds",
             action: #selector(toggleSound),
             keyEquivalent: ""
         )
+        soundToggleItem.image = makeMenuIcon(symbol: "speaker.wave.2")
         soundToggleMenuItem = soundToggleItem
         updateSoundMenuItem()
         menu.addItem(soundToggleItem)
 
         let mouseClickSoundToggleItem = NSMenuItem(
-            title: "",
+            title: "Mouse Click Sounds",
             action: #selector(toggleMouseClickSound),
             keyEquivalent: ""
         )
+        mouseClickSoundToggleItem.image = makeMenuIcon(symbol: "cursorarrow.click")
         mouseClickSoundToggleMenuItem = mouseClickSoundToggleItem
         updateMouseClickSoundMenuItem()
         menu.addItem(mouseClickSoundToggleItem)
 
         let comboSoundToggleItem = NSMenuItem(
-            title: "",
+            title: "Combo Sounds",
             action: #selector(toggleComboSound),
             keyEquivalent: ""
         )
@@ -129,24 +146,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateComboSoundMenuItem()
 
         let comboPackItem = NSMenuItem(
-            title: "Shortcut combo sound set",
+            title: "Combo Sound Pack",
             action: nil,
             keyEquivalent: ""
         )
-        comboPackItem.image = makeBadgeIcon(symbol: "rectangle.stack.fill", backgroundColor: .systemIndigo)
+        comboPackItem.image = makeMenuIcon(symbol: "command")
         comboPackItem.submenu = makeComboPackSubmenu()
         comboPackSubmenuItem = comboPackItem
         menu.addItem(comboPackItem)
-
         menu.addItem(.separator())
-        menu.addItem(makeGroupHeader(title: "App"))
 
+        // ── App section ──────────────────────────────────────────────────
         let quitItem = NSMenuItem(
             title: "Quit DynamicIsland",
             action: #selector(quitApp),
             keyEquivalent: "q"
         )
-        quitItem.image = makeBadgeIcon(symbol: "power", backgroundColor: .systemRed)
+        quitItem.image = makeMenuIcon(symbol: "power")
         menu.addItem(quitItem)
 
         for menuItem in menu.items where menuItem.action != nil {
@@ -259,7 +275,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func updateStatusMenuTitle() {
         guard let menuItem = monitorStatusMenuItem else { return }
-        menuItem.title = isCaptureEnabled ? keyboardMonitor.statusLine : "Keyboard: capture paused"
+        menuItem.title = isCaptureEnabled ? keyboardMonitor.statusLine : "Capture paused"
+        menuItem.image = makeStatusDot(active: isCaptureEnabled)
     }
 
     @objc private func toggleCapture() {
@@ -277,14 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateCaptureMenuItem() {
-        guard let captureToggleMenuItem else { return }
-        if isCaptureEnabled {
-            captureToggleMenuItem.title = "Disable Keystroke Capture"
-            captureToggleMenuItem.image = makeBadgeIcon(symbol: "hand.tap.fill", backgroundColor: .systemGreen)
-        } else {
-            captureToggleMenuItem.title = "Enable Keystroke Capture"
-            captureToggleMenuItem.image = makeBadgeIcon(symbol: "hand.raised.slash.fill", backgroundColor: .systemOrange)
-        }
+        captureToggleMenuItem?.state = isCaptureEnabled ? .on : .off
     }
 
     @objc private func toggleSound() {
@@ -328,7 +338,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func makeComboPackSubmenu() -> NSMenu {
         let submenu = NSMenu()
+
+        // Toggle item sits at the top of the submenu as a checkmark row
         if let toggle = comboSoundToggleMenuItem {
+            toggle.title = "Combo Sounds"
+            toggle.image = makeMenuIcon(symbol: "command")
             submenu.addItem(toggle)
         }
         submenu.addItem(.separator())
@@ -342,7 +356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             item.target = self
             item.representedObject = pack.id as NSString
-            item.image = comboPackBadgeImage(for: pack)
+            item.image = comboPackIcon(for: pack)
             item.state = pack.id == currentId ? .on : .off
             submenu.addItem(item)
         }
@@ -350,99 +364,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return submenu
     }
 
-    /// Badge icons matching `makeBadgeIcon` used elsewhere in the status menu.
-    private func comboPackBadgeImage(for pack: ComboSoundPack) -> NSImage? {
-        switch pack.id {
-        case "classic":
-            return makeBadgeIcon(symbol: "star.fill", backgroundColor: .systemYellow)
-        case "loadout":
-            return makeBadgeIcon(symbol: "scope", backgroundColor: .systemRed)
-        case "chaos":
-            return makeBadgeIcon(symbol: "theatermasks.fill", backgroundColor: .systemPurple)
-        case "soft":
-            return makeBadgeIcon(symbol: "heart.fill", backgroundColor: .systemPink)
-        case "desi-mix":
-            return makeBadgeIcon(symbol: "globe.asia.australia.fill", backgroundColor: .systemTeal)
-        default:
-            return makeBadgeIcon(symbol: "square.stack.fill", backgroundColor: .systemGray)
-        }
+    /// Coloured SF Symbol icons for each combo pack — no heavy badge background,
+    /// just a tinted glyph that reads clearly at small menu sizes.
+    private func comboPackIcon(for pack: ComboSoundPack) -> NSImage? {
+        let (symbol, color): (String, NSColor) = {
+            switch pack.id {
+            case "classic":  return ("star.fill",                   .systemYellow)
+            case "loadout":  return ("scope",                       .systemRed)
+            case "chaos":    return ("theatermasks.fill",            .systemPurple)
+            case "soft":     return ("heart.fill",                   .systemPink)
+            case "desi-mix": return ("globe.asia.australia.fill",    .systemTeal)
+            default:         return ("square.stack.fill",            .systemGray)
+            }
+        }()
+        let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
     }
 
     private func updateSoundMenuItem() {
-        guard let soundToggleMenuItem else { return }
-        if soundPlayer.isEnabled {
-            soundToggleMenuItem.title = "Disable Key Sounds"
-            soundToggleMenuItem.image = makeBadgeIcon(symbol: "speaker.wave.2.fill", backgroundColor: .systemGreen)
-        } else {
-            soundToggleMenuItem.title = "Enable Key Sounds"
-            soundToggleMenuItem.image = makeBadgeIcon(symbol: "speaker.slash.fill", backgroundColor: .systemOrange)
-        }
+        soundToggleMenuItem?.state = soundPlayer.isEnabled ? .on : .off
     }
 
     private func updateMouseClickSoundMenuItem() {
-        guard let mouseClickSoundToggleMenuItem else { return }
-        if soundPlayer.isMouseClickSoundEnabled {
-            mouseClickSoundToggleMenuItem.title = "Disable Mouse Click Sounds"
-            mouseClickSoundToggleMenuItem.image = makeBadgeIcon(
-                symbol: "cursorarrow.click.2",
-                backgroundColor: .systemGreen
-            )
-        } else {
-            mouseClickSoundToggleMenuItem.title = "Enable Mouse Click Sounds"
-            mouseClickSoundToggleMenuItem.image = makeBadgeIcon(
-                symbol: "cursorarrow.click.2",
-                backgroundColor: .systemOrange
-            )
-        }
+        mouseClickSoundToggleMenuItem?.state = soundPlayer.isMouseClickSoundEnabled ? .on : .off
     }
 
     private func updateComboSoundMenuItem() {
-        guard let comboSoundToggleMenuItem else { return }
-        if soundPlayer.isComboSoundEnabled {
-            comboSoundToggleMenuItem.title = "Disable Shortcut Combo Sounds"
-            comboSoundToggleMenuItem.image = makeBadgeIcon(symbol: "command", backgroundColor: .systemGreen)
-        } else {
-            comboSoundToggleMenuItem.title = "Enable Shortcut Combo Sounds"
-            comboSoundToggleMenuItem.image = makeBadgeIcon(symbol: "command", backgroundColor: .systemOrange)
-        }
+        comboSoundToggleMenuItem?.state = soundPlayer.isComboSoundEnabled ? .on : .off
     }
 
-    private func makeBadgeIcon(symbol: String, backgroundColor: NSColor) -> NSImage? {
-        let size = NSSize(width: 16, height: 16)
+    /// A minimal SF Symbol rendered as a template image — adapts automatically
+    /// to dark and light menu backgrounds, matching the system macOS menu style.
+    private func makeMenuIcon(symbol: String, pointSize: CGFloat = 13) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+        guard let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else { return nil }
+        img.isTemplate = true
+        return img
+    }
+
+    /// Small coloured dot used as the status indicator next to the live status line.
+    private func makeStatusDot(active: Bool) -> NSImage {
+        let diameter: CGFloat = 7
+        let size = NSSize(width: diameter, height: diameter)
         let image = NSImage(size: size)
         image.lockFocus()
         defer { image.unlockFocus() }
-
-        let rect = NSRect(origin: .zero, size: size)
-        let badgePath = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
-        NSColor(calibratedWhite: 0.10, alpha: 1).setFill()
-        badgePath.fill()
-        NSColor(calibratedWhite: 1.0, alpha: 0.10).setStroke()
-        badgePath.lineWidth = 1
-        badgePath.stroke()
-
-        guard let symbolImage = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) else {
-            return image
-        }
-
-        let config = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [backgroundColor]))
-        let tinted = symbolImage.withSymbolConfiguration(config)
-        let iconSize = NSSize(width: 10, height: 10)
-        let iconRect = NSRect(
-            x: (size.width - iconSize.width) / 2,
-            y: (size.height - iconSize.height) / 2,
-            width: iconSize.width,
-            height: iconSize.height
-        )
-        tinted?.draw(in: iconRect)
-
+        let color: NSColor = active ? .systemGreen : .systemOrange
+        let path = NSBezierPath(ovalIn: NSRect(origin: .zero, size: size))
+        color.setFill()
+        path.fill()
         return image
     }
 
-    private func makeGroupHeader(title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    /// Uppercase, small, tertiary-coloured section header — identical in style to
+    /// native macOS section dividers (e.g. Finder sidebar, System Settings).
+    private func makeSectionHeader(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.isEnabled = false
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .kern: 0.6
+        ]
+        item.attributedTitle = NSAttributedString(string: title.uppercased(), attributes: attrs)
         return item
     }
 
