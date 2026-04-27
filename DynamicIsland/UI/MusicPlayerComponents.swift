@@ -40,7 +40,7 @@ struct MarqueeText: View {
         nsFont: NSFont.TextStyle = .body,
         textColor: Color         = .primary,
         backgroundColor: Color   = .clear,
-        minDuration: Double      = 3.0,
+        minDuration: Double      = 1.0,
         frameWidth: CGFloat      = 200
     ) {
         self.text            = text
@@ -52,7 +52,7 @@ struct MarqueeText: View {
         self.frameWidth      = frameWidth
     }
 
-    private var needsScrolling: Bool { textSize.width > frameWidth }
+    private var needsScrolling: Bool { textSize.width > frameWidth - 20 }
 
     var body: some View {
         GeometryReader { _ in
