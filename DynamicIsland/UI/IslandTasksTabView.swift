@@ -8,9 +8,16 @@ import SwiftUI
 struct IslandTasksTabView: View {
     @Binding var tasks: [IslandTask]
     @Binding var isComposingTask: Bool
+    private let taskRepository: TaskRepository
 
     @State private var newTaskTitle = ""
     @FocusState private var isInputFocused: Bool
+
+    init(tasks: Binding<[IslandTask]>, isComposingTask: Binding<Bool>, taskRepository: TaskRepository = UserDefaultsTaskRepository()) {
+        _tasks = tasks
+        _isComposingTask = isComposingTask
+        self.taskRepository = taskRepository
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -268,14 +275,14 @@ struct IslandTasksTabView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             tasks[idx].isCompleted.toggle()
         }
-        TaskStorage.save(tasks)
+        taskRepository.save(tasks)
     }
 
     private func deleteTask(_ task: IslandTask) {
         withAnimation(.easeInOut(duration: 0.2)) {
             tasks.removeAll { $0.id == task.id }
         }
-        TaskStorage.save(tasks)
+        taskRepository.save(tasks)
     }
 
     private func commitNewTask() {
@@ -284,7 +291,7 @@ struct IslandTasksTabView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             tasks.insert(IslandTask(title: title), at: 0)
         }
-        TaskStorage.save(tasks)
+        taskRepository.save(tasks)
         newTaskTitle = ""
         isComposingTask = false
         isInputFocused = false

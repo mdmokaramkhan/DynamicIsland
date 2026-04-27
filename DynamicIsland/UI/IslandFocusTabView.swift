@@ -3,239 +3,237 @@
 //  DynamicIsland
 //
 
-import Combine
+import AppKit
 import SwiftUI
 
 struct IslandFocusTabView: View {
-    @Binding var focusPandoraMinutes: Int
-    @Binding var focusPandoraRemainingSec: Int
-    @Binding var focusPandoraIsRunning: Bool
-    @Binding var focusPandoraPulse: Bool
+    @ObservedObject var focusTimer: FocusPandoraTimer
+
+    @AppStorage("island.focusPandora.defaultMinutes") private var defaultMinutes: Int = 25
+    @AppStorage("island.focus.breakMinutes") private var breakMinutes: Int = 5
+    @AppStorage("island.focus.autoStartBreak") private var autoStartBreak: Bool = true
+    @AppStorage("island.focus.dnd") private var focusDND: Bool = true
+    @AppStorage("island.focus.tintRed") private var focusTintRed: Double = 1.00
+    @AppStorage("island.focus.tintGreen") private var focusTintGreen: Double = 0.31
+    @AppStorage("island.focus.tintBlue") private var focusTintBlue: Double = 0.12
+
+    private var phaseTint: Color {
+        let base = Color(red: focusTintRed, green: focusTintGreen, blue: focusTintBlue)
+        return focusTimer.phase == .focus
+            ? base
+            : base.mix(with: .white, by: 0.28)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Focus")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.72))
-                    .tracking(0.45)
-                Text(focusPandoraIsRunning ? "COUNTING DOWN" : "READY")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(focusPandoraIsRunning ? Color.white.opacity(0.58) : PandoraChrome.muted)
-                    .tracking(0.5)
-                Spacer(minLength: 0)
-                Text("\(focusPandoraMinutes)m")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.5))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.white.opacity(0.055)))
-            }
-
-            HStack(alignment: .center, spacing: 12) {
-                focusPandoraProgressMark
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Text("Pandora")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(PandoraChrome.muted)
-                            .tracking(0.4)
-                        Circle()
-                            .fill(focusPandoraIsRunning ? Color.white.opacity(0.72) : PandoraChrome.dim)
-                            .frame(width: 4, height: 4)
-                            .scaleEffect(focusPandoraIsRunning && focusPandoraPulse ? 1.8 : 1)
-                            .opacity(focusPandoraIsRunning && focusPandoraPulse ? 0.45 : 1)
-                    }
-
-                    Text(focusPandoraTimeString)
-                        .font(.system(size: 25, weight: .light, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(
-                            focusPandoraRemainingSec == 0
-                                ? PandoraChrome.dim
-                                : PandoraChrome.primary
-                        )
-                        .contentTransition(.numericText())
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                focusPandoraControlButton(
-                    icon: "arrow.counterclockwise",
-                    size: 12,
-                    label: "Reset timer",
-                    action: resetFocusPandora
-                )
-
-                focusPandoraControlButton(
-                    icon: focusPandoraIsRunning ? "pause.fill" : "play.fill",
-                    size: 17,
-                    label: focusPandoraIsRunning ? "Pause" : "Start",
-                    isPrimary: true,
-                    action: toggleFocusPandora
-                )
-                .scaleEffect(focusPandoraIsRunning && focusPandoraPulse ? 1.06 : 1)
-            }
-            .padding(10)
-            .background(IslandPanelBackground.notchSubpanel(cornerRadius: 13))
-
-            HStack(spacing: 5) {
-                ForEach(focusPandoraPresets, id: \.self) { minutes in
-                    focusPandoraPresetChip(minutes: minutes)
-                }
-            }
+            hero
+            controls
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(IslandPanelBackground.notchPanel(cornerRadius: 15))
-        .animation(
-            focusPandoraIsRunning
-                ? .easeInOut(duration: 0.75).repeatForever(autoreverses: true)
-                : .easeOut(duration: 0.18),
-            value: focusPandoraPulse
+        .background(focusBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
         )
-        .animation(.easeInOut(duration: 0.24), value: focusPandoraRemainingSec)
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            guard focusPandoraIsRunning, focusPandoraRemainingSec > 0 else { return }
-            focusPandoraRemainingSec -= 1
-            if focusPandoraRemainingSec == 0 { stopFocusPandora() }
+        .animation(.smooth(duration: 0.28), value: focusTimer.phase.rawValue)
+        .animation(.easeInOut(duration: 0.24), value: focusTimer.remainingSec)
+        .onAppear { focusTimer.syncSettingsIfIdle() }
+        .onChange(of: defaultMinutes) { _, _ in focusTimer.syncSettingsIfIdle() }
+        .onChange(of: breakMinutes) { _, _ in focusTimer.syncSettingsIfIdle() }
+    }
+
+    private var hero: some View {
+        HStack(alignment: .center, spacing: 16) {
+            timerRing
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    Image(systemName: focusTimer.phase.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(focusTimer.phase.title)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                    statusDot
+                }
+                .foregroundStyle(Color.white.opacity(0.72))
+
+                Text(focusTimer.timeString)
+                    .font(.system(size: 38, weight: .light, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.white.opacity(0.94))
+                    .contentTransition(.numericText())
+
+                Text(secondaryLine)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.44))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.smooth(duration: 0.2)) { focusTimer.toggle() }
+            } label: {
+                Image(systemName: focusTimer.isRunning ? "pause.fill" : "play.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.82))
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(Color.white.opacity(0.88)))
+                    .shadow(color: phaseTint.opacity(focusTimer.isRunning ? 0.36 : 0.16), radius: 14, y: 6)
+            }
+            .buttonStyle(.plain)
+            .scaleEffect(focusTimer.isRunning && focusTimer.pulse ? 1.035 : 1)
+            .accessibilityLabel(focusTimer.isRunning ? "Pause focus timer" : "Start focus timer")
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(Color.white.opacity(0.055))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
 
-    private var focusPandoraPresets: [Int] { [5, 15, 25, 45] }
-
-    private var focusPandoraProgress: CGFloat {
-        guard focusPandoraMinutes > 0 else { return 0 }
-        let total = CGFloat(focusPandoraMinutes * 60)
-        return max(0, min(1, CGFloat(focusPandoraRemainingSec) / total))
-    }
-
-    private var focusPandoraProgressMark: some View {
+    private var timerRing: some View {
         ZStack {
             Circle()
-                .stroke(PandoraChrome.divider, lineWidth: 2)
+                .stroke(Color.white.opacity(0.11), lineWidth: 4)
+
             Circle()
-                .trim(from: 0, to: focusPandoraProgress)
+                .trim(from: 0, to: focusTimer.progress)
                 .stroke(
-                    PandoraChrome.primary,
-                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    phaseTint,
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-                .opacity(focusPandoraRemainingSec == 0 ? 0.25 : 0.9)
-            Image(systemName: focusPandoraIsRunning ? "hourglass" : "timer")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(focusPandoraIsRunning ? PandoraChrome.primary : PandoraChrome.muted)
-                .symbolEffect(.pulse, options: .repeating, value: focusPandoraIsRunning)
+                .shadow(color: phaseTint.opacity(focusTimer.isRunning ? 0.36 : 0.12), radius: 8)
+
+            Circle()
+                .fill(phaseTint.opacity(focusTimer.isRunning ? 0.16 : 0.08))
+                .frame(width: 38, height: 38)
+                .scaleEffect(focusTimer.isRunning && focusTimer.pulse ? 1.08 : 1)
+
+            Image(systemName: focusTimer.phase.symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.82))
+                .symbolEffect(.pulse, options: .repeating, value: focusTimer.isRunning)
         }
-        .frame(width: 34, height: 34)
-        .scaleEffect(focusPandoraIsRunning && focusPandoraPulse ? 1.04 : 1)
+        .frame(width: 64, height: 64)
     }
 
-    private var focusPandoraTimeString: String {
-        let m = focusPandoraRemainingSec / 60
-        let s = focusPandoraRemainingSec % 60
-        return String(format: "%d:%02d", m, s)
+    private var controls: some View {
+        HStack(spacing: 8) {
+            ForEach([5, 15, 25], id: \.self) { minutes in
+                presetButton(minutes)
+            }
+
+            Button {
+                withAnimation(.smooth(duration: 0.2)) { focusTimer.reset() }
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 30, height: 26)
+                    .background(Capsule().fill(Color.white.opacity(0.055)))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.white.opacity(0.54))
+            .accessibilityLabel("Reset focus timer")
+        }
     }
 
-    private func focusPandoraPresetChip(minutes: Int) -> some View {
-        let selected = focusPandoraMinutes == minutes
+    private func presetButton(_ minutes: Int) -> some View {
+        let selected = focusTimer.phase == .focus && focusTimer.defaultMinutes == minutes
         return Button {
-            selectFocusPandoraPreset(minutes)
+            withAnimation(.smooth(duration: 0.2)) {
+                focusTimer.selectFocusMinutes(minutes)
+            }
         } label: {
             Text("\(minutes)m")
-                .font(.system(size: 9, weight: selected ? .bold : .semibold, design: .rounded))
+                .font(.system(size: 10, weight: selected ? .bold : .semibold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(selected ? PandoraChrome.primary : PandoraChrome.muted)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule()
-                        .fill(selected ? Color.white.opacity(0.11) : Color.white.opacity(0.035))
-                )
+                .frame(height: 26)
+                .background(Capsule().fill(selected ? phaseTint.opacity(0.18) : Color.white.opacity(0.045)))
                 .overlay(
                     Capsule()
-                        .stroke(selected ? Color.white.opacity(0.2) : Color.white.opacity(0.07), lineWidth: 1)
+                        .strokeBorder(selected ? phaseTint.opacity(0.22) : Color.white.opacity(0.06), lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
+        .foregroundStyle(selected ? Color.white.opacity(0.92) : Color.white.opacity(0.5))
         .accessibilityLabel("\(minutes) minutes")
     }
 
-    private func focusPandoraControlButton(
-        icon: String,
-        size: CGFloat,
-        label: String,
-        isPrimary: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: size, weight: isPrimary ? .semibold : .regular))
-                .foregroundStyle(isPrimary ? PandoraChrome.primary : PandoraChrome.muted)
-                .frame(width: isPrimary ? 34 : 28, height: 30)
-                .background(
-                    Circle()
-                        .fill(isPrimary ? Color.white.opacity(0.1) : Color.white.opacity(0.04))
-                )
-                .overlay(
-                    Circle()
-                        .stroke(isPrimary ? Color.white.opacity(0.18) : Color.white.opacity(0.07), lineWidth: 1)
-                )
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-    }
+    private var focusBackground: some View {
+        ZStack {
+            IslandPanelBackground.notchPanel(cornerRadius: 18)
 
-    private func toggleFocusPandora() {
-        if focusPandoraRemainingSec == 0, !focusPandoraIsRunning {
-            focusPandoraRemainingSec = focusPandoraMinutes * 60
-        }
+            LinearGradient(
+                colors: [
+                    phaseTint.opacity(focusTimer.isRunning ? 0.28 : 0.16),
+                    phaseTint.opacity(focusTimer.isRunning ? 0.10 : 0.055),
+                    Color.clear,
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
 
-        withAnimation(.easeInOut(duration: 0.18)) {
-            focusPandoraIsRunning.toggle()
-            focusPandoraPulse = focusPandoraIsRunning
+            LinearGradient(
+                colors: [
+                    Color.clear,
+                    phaseTint.opacity(focusTimer.isRunning ? 0.18 : 0.08),
+                ],
+                startPoint: .center,
+                endPoint: .topTrailing
+            )
         }
     }
 
-    private func resetFocusPandora() {
-        withAnimation(.easeInOut(duration: 0.18)) {
-            focusPandoraIsRunning = false
-            focusPandoraPulse = false
-            focusPandoraRemainingSec = focusPandoraMinutes * 60
-        }
+    private var statusDot: some View {
+        Circle()
+            .fill(focusTimer.isRunning ? phaseTint : Color.white.opacity(0.28))
+            .frame(width: 5, height: 5)
+            .scaleEffect(focusTimer.isRunning && focusTimer.pulse ? 1.7 : 1)
+            .opacity(focusTimer.isRunning && focusTimer.pulse ? 0.5 : 1)
     }
 
-    private func selectFocusPandoraPreset(_ minutes: Int) {
-        withAnimation(.easeInOut(duration: 0.18)) {
-            focusPandoraIsRunning = false
-            focusPandoraPulse = false
-            focusPandoraMinutes = minutes
-            focusPandoraRemainingSec = minutes * 60
+    private var secondaryLine: String {
+        var parts = [focusTimer.sessionSummary]
+        if focusTimer.phase == .focus {
+            parts.append("\(focusTimer.breakMinutes)m break")
         }
+        if autoStartBreak {
+            parts.append("auto break")
+        }
+        if focusDND {
+            parts.append("DND")
+        }
+        return parts.joined(separator: " · ")
     }
+}
 
-    private func stopFocusPandora() {
-        withAnimation(.easeOut(duration: 0.18)) {
-            focusPandoraIsRunning = false
-            focusPandoraPulse = false
-        }
+private extension Color {
+    func mix(with other: Color, by amount: Double) -> Color {
+        let amount = max(0, min(1, amount))
+        guard
+            let lhs = NSColor(self).usingColorSpace(.deviceRGB),
+            let rhs = NSColor(other).usingColorSpace(.deviceRGB)
+        else { return self }
+
+        return Color(
+            red: lhs.redComponent + (rhs.redComponent - lhs.redComponent) * amount,
+            green: lhs.greenComponent + (rhs.greenComponent - lhs.greenComponent) * amount,
+            blue: lhs.blueComponent + (rhs.blueComponent - lhs.blueComponent) * amount
+        )
     }
 }
 
 #Preview("Focus") {
-    @Previewable @State var minutes = 25
-    @Previewable @State var remaining = 18 * 60 + 32
-    @Previewable @State var running = true
-    @Previewable @State var pulse = true
-    IslandFocusTabView(
-        focusPandoraMinutes: $minutes,
-        focusPandoraRemainingSec: $remaining,
-        focusPandoraIsRunning: $running,
-        focusPandoraPulse: $pulse
-    )
-    .frame(width: 400, alignment: .leading)
-    .padding(16)
-    .background(Color.black)
-    .preferredColorScheme(.dark)
+    IslandFocusTabView(focusTimer: .shared)
+        .frame(width: 400, alignment: .leading)
+        .padding(16)
+        .background(Color.black)
+        .preferredColorScheme(.dark)
 }

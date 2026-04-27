@@ -2,85 +2,146 @@
 //  SettingsWindowManager.swift
 //  DynamicIsland
 //
-//  Presents app settings in a standard titled window (not the floating island).
-//
 
 import AppKit
 import SwiftUI
 
 @MainActor
-final class SettingsWindowManager: NSObject, NSWindowDelegate {
+final class SettingsWindowManager: NSObject {
+
     private var window: NSWindow?
+    private var windowCloseObserver: NSObjectProtocol?
     private let activationPolicyOnClose: () -> Void
 
-    /// `activationPolicyOnClose` should restore the menu-bar (accessory) policy when no other regular window
-    /// (e.g. onboarding) is visible.
     init(activationPolicyOnClose: @escaping () -> Void) {
         self.activationPolicyOnClose = activationPolicyOnClose
         super.init()
     }
 
-    /// True while the settings window exists and is visible (used to avoid demoting activation policy while it is open).
     func isWindowOpen() -> Bool {
         window?.isVisible == true
     }
 
-    func show(keyboardMonitor: GlobalKeystrokeMonitor) {
+    func show(keyboardMonitor: GlobalKeystrokeMonitor, dependencies: AppDependencies = .shared) {
+
+        // 🔁 Reuse existing window
         if let window, window.isVisible {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            animateFocus(window)
             return
         }
 
-        let view = IslandSettingsView(
+        let rootView = IslandSettingsView(
             keyboardMonitor: keyboardMonitor,
-            permissions: PermissionManager.shared
+            permissions: dependencies.permissionProvider as! PermissionManager
         )
-        let controller = NSHostingController(rootView: view)
-        controller.view.wantsLayer = true
-        controller.view.frame = NSRect(x: 0, y: 0, width: 820, height: 640)
+
+        let hosting = NSHostingController(rootView: rootView)
+        hosting.view.wantsLayer = true
+        hosting.view.layer?.cornerRadius = 16
+        hosting.view.layer?.masksToBounds = true
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 640),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 660),
+            styleMask: [
+                .titled,
+                .closable,
+                .miniaturizable,
+                .resizable,
+                .fullSizeContentView
+            ],
             backing: .buffered,
             defer: false
         )
-        win.title = "Dynamic Island"
+
+        // MARK: - Apple Style Window
+
+        win.title = ""
         win.isOpaque = false
         win.backgroundColor = .clear
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
-        if #available(macOS 11.0, *) {
-            win.titlebarSeparatorStyle = .none
-        }
+
         if #available(macOS 13.0, *) {
-            win.toolbarStyle = .unified
-        }
-        win.contentViewController = controller
-        win.setContentSize(NSSize(width: 820, height: 640))
-        win.minSize = NSSize(width: 720, height: 480)
-        win.center()
-        win.delegate = self
-        if let screen = NSScreen.main {
-            let vf = screen.visibleFrame
-            if win.frame.maxY > vf.maxY {
-                var r = win.frame
-                r.origin.y = vf.maxY - r.height
-                win.setFrame(r, display: true)
-            }
+            win.toolbarStyle = .unifiedCompact
         }
 
+        win.contentViewController = hosting
+        win.setContentSize(NSSize(width: 860, height: 660))
+        win.minSize = NSSize(width: 720, height: 500)
+
+        win.isMovableByWindowBackground = true
+        win.hasShadow = true
+        win.level = .normal
+        win.isReleasedWhenClosed = false
+
+        // Better positioning
+        if let screen = NSScreen.main {
+            let frame = screen.visibleFrame
+            let x = frame.midX - 430
+            let y = frame.midY - 330
+            win.setFrame(NSRect(x: x, y: y, width: 860, height: 660), display: true)
+        }
+
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: win,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleWindowWillClose(note)
+        }
         self.window = win
+
+        // Activate app
         NSApp.setActivationPolicy(.regular)
+        win.alphaValue = 0
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // 🔥 Smooth Apple-style animation
+        animateOpen(win)
     }
 
-    // MARK: - NSWindowDelegate
+    // MARK: - Animations
 
-    func windowWillClose(_ notification: Notification) {
+    private func animateOpen(_ window: NSWindow) {
+        window.alphaValue = 0
+        window.setFrameOrigin(
+            NSPoint(
+                x: window.frame.origin.x,
+                y: window.frame.origin.y - 10
+            )
+        )
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.28
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+
+            window.animator().alphaValue = 1
+            window.animator().setFrameOrigin(
+                NSPoint(
+                    x: window.frame.origin.x,
+                    y: window.frame.origin.y + 10
+                )
+            )
+        }
+    }
+
+    private func animateFocus(_ window: NSWindow) {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            window.animator().alphaValue = 1
+        }
+    }
+
+    // MARK: - Close
+    private func handleWindowWillClose(_ notification: Notification) {
         guard (notification.object as? NSWindow) === window else { return }
+        if let observer = windowCloseObserver {
+            NotificationCenter.default.removeObserver(observer)
+            windowCloseObserver = nil
+        }
         window = nil
         activationPolicyOnClose()
     }

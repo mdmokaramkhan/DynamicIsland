@@ -2,8 +2,7 @@
 //  IslandSettingsView.swift
 //  DynamicIsland
 //
-//  Redesigned settings window — macOS vibrancy, SF Symbols throughout,
-//  seven panes: General, Media, Appearance, Focus, Shortcuts, Privacy, Advanced.
+//  Settings window with native macOS materials and compact grouped panes.
 //
 
 import AppKit
@@ -14,61 +13,6 @@ import UniformTypeIdentifiers
 
 struct IslandSettingsView: View {
 
-    // MARK: Panes
-
-    private enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-        case general, media, appearance, focus, shortcuts, permissions, advanced
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .general:     return "General"
-            case .media:       return "Media"
-            case .appearance:  return "Appearance"
-            case .focus:       return "Focus"
-            case .shortcuts:   return "Shortcuts"
-            case .permissions: return "Privacy"
-            case .advanced:    return "Advanced"
-            }
-        }
-
-        var subtitle: String {
-            switch self {
-            case .general:     return "Overview & display"
-            case .media:       return "Now playing"
-            case .appearance:  return "Theme & position"
-            case .focus:       return "Pomodoro timer"
-            case .shortcuts:   return "Hotkeys & triggers"
-            case .permissions: return "Access & permissions"
-            case .advanced:    return "Developer & debug"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .general:     return "sparkles"
-            case .media:       return "music.note.list"
-            case .appearance:  return "sun.max"
-            case .focus:       return "timer"
-            case .shortcuts:   return "keyboard"
-            case .permissions: return "lock.shield"
-            case .advanced:    return "gearshape.2"
-            }
-        }
-
-        var iconColors: [Color] {
-            switch self {
-            case .general:     return [Color(red:0.48,green:0.43,blue:0.98), Color(red:0.35,green:0.78,blue:0.98)]
-            case .media:       return [Color(red:1.00,green:0.22,blue:0.37), Color(red:1.00,green:0.42,blue:0.62)]
-            case .appearance:  return [Color(red:1.00,green:0.62,blue:0.04), Color(red:1.00,green:0.80,blue:0.01)]
-            case .focus:       return [Color(red:0.19,green:0.82,blue:0.35), Color(red:0.11,green:0.75,blue:0.33)]
-            case .shortcuts:   return [Color(red:0.04,green:0.52,blue:1.00), Color(red:0.00,green:0.48,blue:1.00)]
-            case .permissions: return [Color(red:0.19,green:0.82,blue:0.35), Color(red:0.06,green:0.43,blue:0.34)]
-            case .advanced:    return [Color(red:0.39,green:0.39,blue:0.40), Color(red:0.23,green:0.23,blue:0.24)]
-            }
-        }
-    }
-
     // MARK: Dependencies
 
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
@@ -77,17 +21,20 @@ struct IslandSettingsView: View {
 
     // MARK: Persisted state
 
-    @AppStorage("island.musicControlSlots.v1")
+    @AppStorage(AppSettings.Key.musicControlSlotsV1)
     private var musicControlSlotsData: Data =
         (try? JSONEncoder().encode(MusicControlButton.defaultLayout)) ?? Data()
 
-    @AppStorage("island.focusPandora.defaultMinutes")  private var focusMinutes: Int = 25
-    @AppStorage("island.focus.breakMinutes")            private var breakMinutes: Int = 5
-    @AppStorage("island.focus.autoStartBreak")          private var autoStartBreak: Bool = true
-    @AppStorage("island.focus.pauseMedia")              private var pauseMediaOnFocus: Bool = false
-    @AppStorage("island.focus.endSound")                private var endSound: Bool = true
-    @AppStorage("island.focus.longBreakInterval")       private var longBreakInterval: Int = 4
-    @AppStorage("island.focus.dnd")                     private var focusDND: Bool = true
+    @AppStorage(AppSettings.Key.focusDefaultMinutes)    private var focusMinutes: Int = 25
+    @AppStorage(AppSettings.Key.focusBreakMinutes)      private var breakMinutes: Int = 5
+    @AppStorage(AppSettings.Key.focusAutoStartBreak)    private var autoStartBreak: Bool = true
+    @AppStorage(AppSettings.Key.focusPauseMedia)        private var pauseMediaOnFocus: Bool = false
+    @AppStorage(AppSettings.Key.focusEndSound)          private var endSound: Bool = true
+    @AppStorage(AppSettings.Key.focusLongBreakInterval) private var longBreakInterval: Int = 4
+    @AppStorage(AppSettings.Key.focusDnd)               private var focusDND: Bool = true
+    @AppStorage(AppSettings.Key.focusTintRed)           private var focusTintRed: Double = 1.00
+    @AppStorage(AppSettings.Key.focusTintGreen)         private var focusTintGreen: Double = 0.31
+    @AppStorage(AppSettings.Key.focusTintBlue)          private var focusTintBlue: Double = 0.12
 
     @AppStorage("island.display.allDisplays")           private var showOnAllDisplays: Bool = true
     @AppStorage("island.display.autoCollapse")          private var autoCollapse: Bool = true
@@ -116,8 +63,7 @@ struct IslandSettingsView: View {
 
     // MARK: Local state
 
-    @State private var selectedPane: SettingsPane = .general
-    @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
+    @StateObject private var viewModel = IslandSettingsViewModel()
 
     // MARK: Body
 
@@ -126,7 +72,7 @@ struct IslandSettingsView: View {
             SettingsVisualEffectBackground(material: .underWindowBackground, blendingMode: .behindWindow)
                 .ignoresSafeArea()
 
-            NavigationSplitView(columnVisibility: $splitColumnVisibility) {
+            NavigationSplitView(columnVisibility: $viewModel.splitColumnVisibility) {
                 sidebar
             } detail: {
                 detailView
@@ -139,55 +85,93 @@ struct IslandSettingsView: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        List(SettingsPane.allCases, selection: $selectedPane) { pane in
-            sidebarRow(pane)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Dynamic Island")
+                    .font(.headline.weight(.semibold))
+                Text("Settings")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 18)
+
+            VStack(alignment: .leading, spacing: 14) {
+                sidebarSection("Island", panes: [.general, .media, .appearance])
+                sidebarSection("Workflow", panes: [.focus, .shortcuts])
+                sidebarSection("System", panes: [.permissions, .advanced])
+            }
+
+            Spacer(minLength: 0)
         }
-        .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.ultraThinMaterial.opacity(0.55))
+        .navigationSplitViewColumnWidth(min: 190, ideal: 205, max: 240)
     }
 
-    private func sidebarRow(_ pane: SettingsPane) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: pane.iconColors,
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
-                    .frame(width: 28, height: 28)
-                    .shadow(color: pane.iconColors[0].opacity(0.30), radius: 2, y: 1)
-                Image(systemName: pane.symbol)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(pane.title)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-                Text(pane.subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+    private func sidebarSection(_ title: String, panes: [SettingsPane]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+
+            VStack(spacing: 2) {
+                ForEach(panes) { pane in
+                    sidebarMenuRow(pane)
+                }
             }
         }
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
-        .tag(pane)
+    }
+
+    private func sidebarMenuRow(_ pane: SettingsPane) -> some View {
+        Button {
+            withAnimation(.smooth(duration: 0.16)) {
+                        viewModel.selectedPane = pane
+            }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: pane.symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(viewModel.selectedPane == pane ? Color.accentColor : Color.secondary)
+                    .frame(width: 18)
+
+                Text(pane.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(viewModel.selectedPane == pane ? Color.primary : Color.secondary)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(viewModel.selectedPane == pane ? Color.accentColor.opacity(0.15) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(viewModel.selectedPane == pane ? Color.accentColor.opacity(0.18) : Color.clear, lineWidth: 0.5)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Detail Router
 
     private var settingsDetailContentMaxWidth: CGFloat {
-        splitColumnVisibility == .detailOnly ? .infinity : 600
+        640
     }
 
     private var detailView: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                paneHeader
+
                 Group {
-                    switch selectedPane {
+                    switch viewModel.selectedPane {
                     case .general:     generalPane
                     case .media:       mediaPane
                     case .appearance:  appearancePane
@@ -198,39 +182,50 @@ struct IslandSettingsView: View {
                     }
                 }
                 .frame(maxWidth: settingsDetailContentMaxWidth, alignment: .leading)
-                .padding(24)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: settingsDetailContentMaxWidth, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.top, 26)
+            .padding(.bottom, 30)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
+    }
+
+    private var paneHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(LinearGradient(
+                        colors: viewModel.selectedPane.iconColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 34, height: 34)
+                Image(systemName: viewModel.selectedPane.symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModel.selectedPane.title)
+                    .font(.title2.weight(.semibold))
+                Text(viewModel.selectedPane.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: settingsDetailContentMaxWidth, alignment: .leading)
     }
 
     // MARK: - General Pane
 
     private var generalPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionLabel("Island preview")
+            sectionLabel("Display")
             settingsCard {
-                // Live HUD preview
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.black)
-                    HStack(spacing: 10) {
-                        keyChip("⌘ A")
-                        keyChip("⇧ K")
-                        Spacer()
-                        Text("♪ Starboy — The Weeknd")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.45))
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 14)
-                }
-                .frame(height: 42)
-                .padding(.bottom, 4)
-
-                Divider().opacity(0.4)
-
                 settingsRow(
                     symbol: "rectangle.on.rectangle",
                     label: "Show on all displays",
@@ -259,23 +254,54 @@ struct IslandSettingsView: View {
             sectionLabel("Default mode")
                 .padding(.top, 18)
             settingsCard {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("What the island shows when idle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: $defaultMode) {
-                        Text("Keystroke").tag(0)
-                        Text("Media").tag(1)
-                        Text("Clock").tag(2)
-                        Text("Minimal").tag(3)
-                    }
-                    .pickerStyle(.segmented)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 10)], spacing: 10) {
+                    radioItem(title: "Keystroke", icon: "keyboard", tag: 0)
+                    radioItem(title: "Media", icon: "music.note", tag: 1)
+                    radioItem(title: "Clock", icon: "clock", tag: 2)
+                    radioItem(title: "Minimal", icon: "circle", tag: 3)
                 }
-                .padding(14)
+                .padding(10)
             }
 
             versionRow
                 .padding(.top, 12)
+        }
+    }
+
+    // MARK: - Picker Item
+    private func radioItem(title: String, icon: String, tag: Int) -> some View {
+        VStack(spacing: 6) {
+
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .lineLimit(1)
+
+        }
+        .foregroundStyle(defaultMode == tag ? Color.accentColor : Color.primary)
+        .frame(maxWidth: .infinity, minHeight: 58)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(defaultMode == tag
+                      ? Color.accentColor.opacity(0.18)
+                      : Color.primary.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(
+                    defaultMode == tag
+                    ? Color.accentColor.opacity(0.65)
+                    : Color.primary.opacity(0.08),
+                    lineWidth: defaultMode == tag ? 1.2 : 0.5
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                defaultMode = tag
+            }
         }
     }
 
@@ -501,7 +527,82 @@ struct IslandSettingsView: View {
                     .frame(width: 120)
                 }
             }
+
+            sectionLabel("Color")
+                .padding(.top, 18)
+            settingsCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        ForEach(focusTintPresets, id: \.name) { preset in
+                            focusTintPresetButton(preset)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        ColorPicker("", selection: focusTintBinding, supportsOpacity: false)
+                            .labelsHidden()
+                            .controlSize(.small)
+                    }
+
+                    Text("Sets the Pandora glow, progress ring, and running-state tint.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(14)
+            }
         }
+    }
+
+    private var focusTintBinding: Binding<Color> {
+        Binding(
+            get: {
+                Color(red: focusTintRed, green: focusTintGreen, blue: focusTintBlue)
+            },
+            set: { newValue in
+                if let components = NSColor(newValue).usingColorSpace(.deviceRGB) {
+                    focusTintRed = components.redComponent
+                    focusTintGreen = components.greenComponent
+                    focusTintBlue = components.blueComponent
+                }
+            }
+        )
+    }
+
+    private var focusTintPresets: [(name: String, color: Color, red: Double, green: Double, blue: Double)] {
+        [
+            ("Ember", Color(red: 1.00, green: 0.31, blue: 0.12), 1.00, 0.31, 0.12),
+            ("Mango", Color(red: 1.00, green: 0.58, blue: 0.16), 1.00, 0.58, 0.16),
+            ("Rose", Color(red: 1.00, green: 0.28, blue: 0.42), 1.00, 0.28, 0.42),
+            ("Mint", Color(red: 0.32, green: 0.92, blue: 0.62), 0.32, 0.92, 0.62),
+            ("Sky", Color(red: 0.36, green: 0.70, blue: 1.00), 0.36, 0.70, 1.00)
+        ]
+    }
+
+    private func focusTintPresetButton(_ preset: (name: String, color: Color, red: Double, green: Double, blue: Double)) -> some View {
+        Button {
+            withAnimation(.smooth(duration: 0.16)) {
+                focusTintRed = preset.red
+                focusTintGreen = preset.green
+                focusTintBlue = preset.blue
+            }
+        } label: {
+            Circle()
+                .fill(preset.color)
+                .frame(width: 20, height: 20)
+                .overlay(
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(focusTintMatches(preset) ? 0.55 : 0.12), lineWidth: focusTintMatches(preset) ? 2 : 1)
+                )
+                .shadow(color: preset.color.opacity(0.25), radius: 4, y: 1)
+        }
+        .buttonStyle(.plain)
+        .help(preset.name)
+    }
+
+    private func focusTintMatches(_ preset: (name: String, color: Color, red: Double, green: Double, blue: Double)) -> Bool {
+        abs(focusTintRed - preset.red) < 0.01 &&
+        abs(focusTintGreen - preset.green) < 0.01 &&
+        abs(focusTintBlue - preset.blue) < 0.01
     }
 
     // MARK: - Shortcuts Pane
@@ -864,7 +965,7 @@ struct IslandSettingsView: View {
 
     // MARK: - Reusable Components
 
-    // Frosted card wrapper
+    // Native grouped settings wrapper
     @ViewBuilder
     private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -872,10 +973,10 @@ struct IslandSettingsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.05), lineWidth: 0.5)
         )
     }
 
@@ -1064,21 +1165,9 @@ struct IslandSettingsView: View {
         Text(text.uppercased())
             .font(.system(size: 10.5, weight: .semibold))
             .foregroundStyle(.secondary)
-            .tracking(0.5)
             .padding(.top, 2)
             .padding(.bottom, 7)
             .padding(.leading, 2)
-    }
-
-    // HUD key chip for preview
-    private func keyChip(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Color.white.opacity(0.10))
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 
     // Version row

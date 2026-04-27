@@ -70,11 +70,13 @@ struct DynamicIslandView: View {
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
     @ObservedObject var keystrokeStore: KeystrokePanelStore
     @ObservedObject var musicManager: MusicManager
+    @ObservedObject private var focusTimer = FocusPandoraTimer.shared
     let hitState: IslandHitState
     /// Presents the standard settings window (not island content).
     var onOpenSettings: () -> Void = {}
 
-    @AppStorage("island.selectedTab") private var selectedTabRaw: String = IslandTab.media.rawValue
+    @AppStorage(AppSettings.Key.selectedTab) private var selectedTabRaw: String = IslandTab.media.rawValue
+    @AppStorage(AppSettings.Key.appearanceShadow) private var dropShadow: Bool = true
 
     @State private var isHovering = false
     @State private var isExpandedByInput = false
@@ -122,6 +124,13 @@ struct DynamicIslandView: View {
         .onChange(of: musicManager.isPlaying) { _, _ in
             withAnimation(stripContentFade) { recalculateDisplayMode() }
         }
+        .onChange(of: focusTimer.isRunning) { _, _ in
+            withAnimation(stripContentFade) { recalculateDisplayMode() }
+        }
+        .onChange(of: focusTimer.remainingSec) { _, _ in
+            guard displayMode != .hoverExpanded else { return }
+            withAnimation(stripContentFade) { recalculateDisplayMode() }
+        }
         .onChange(of: isComposingTask) { _, _ in
             withAnimation(isComposingTask ? openAnimation : closeAnimation) {
                 recalculateDisplayMode()
@@ -152,19 +161,31 @@ struct DynamicIslandView: View {
             height: displayMode == .idle ? collapsedSize.height : nil
         )
         .background(
-            NotchShape(topRadius: currentTopRadius, bottomRadius: currentBottomRadius)
-                .fill(Color.black)
+            ZStack {
+                if shouldDrawAmbientShadow {
+                    NotchShape(topRadius: currentTopRadius, bottomRadius: currentBottomRadius)
+                        .fill(Color.black.opacity(0.48))
+                        .blur(radius: 14)
+                        .offset(y: 7)
+                        .padding(.horizontal, -10)
+                        .padding(.bottom, -18)
+                        .transition(.opacity)
+                }
+
+                NotchShape(topRadius: currentTopRadius, bottomRadius: currentBottomRadius)
+                    .fill(Color.black)
+            }
         )
         .clipShape(
             NotchShape(topRadius: currentTopRadius, bottomRadius: currentBottomRadius)
         )
-        .shadow(
-            color: displayMode != .idle ? Color.black.opacity(0.65) : .clear,
-            radius: 8, x: 0, y: 5
-        )
         // Idle and compact strip share the same ease; hover keeps the bouncy open spring.
         .animation(modeChangeAnimation, value: displayMode)
-        .animation(.smooth(duration: 0.32), value: selectedTabRaw)
+        .animation(.smooth(duration: 0.90), value: selectedTabRaw)
+    }
+
+    private var shouldDrawAmbientShadow: Bool {
+        dropShadow && displayMode != .idle
     }
 
     private var modeChangeAnimation: Animation {
@@ -191,18 +212,11 @@ struct DynamicIslandView: View {
 
     @ViewBuilder
     private var islandExpandedContent: some View {
-        if !keyboardMonitor.fallbackMessage.isEmpty {
-            Text(keyboardMonitor.fallbackMessage)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.88))
-                .multilineTextAlignment(.center)
-        } else {
-            IslandTabView(
-                keyboardMonitor: keyboardMonitor,
-                isComposingTask: $isComposingTask,
-                onOpenSettings: onOpenSettings
-            )
-        }
+        IslandTabView(
+            keyboardMonitor: keyboardMonitor,
+            isComposingTask: $isComposingTask,
+            onOpenSettings: onOpenSettings
+        )
     }
 
     // MARK: - Compact strip (music + keystroke, animated)
@@ -215,7 +229,7 @@ struct DynamicIslandView: View {
     /// Drives cross-fade between “music” and “keystroke” row layouts.
     private var compactStripContentSignature: String {
         let tid = visibleKeystrokeToken.map { $0.id.uuidString } ?? ""
-        return "\(keyNoteDisplayTick)-\(showKeyNoteInStrip)-\(tid)-\(musicManager.isPlaying)"
+        return "\(keyNoteDisplayTick)-\(showKeyNoteInStrip)-\(tid)-\(musicManager.isPlaying)-\(focusTimer.isRunning)-\(focusTimer.phase.rawValue)-\(focusTimer.remainingSec)"
     }
 
     private var compactKeystrokeStrip: some View {
@@ -224,12 +238,16 @@ struct DynamicIslandView: View {
         return HStack(spacing: 0) {
             if showKey {
                 appIconView
+            } else if focusTimer.isRunning {
+                compactFocusLeading
             } else {
                 musicAlbumLeading(tint: tint)
             }
             Spacer(minLength: 8)
             if showKey, let token = visibleKeystrokeToken {
                 KeystrokeChipView(token: token)
+            } else if focusTimer.isRunning {
+                compactFocusTrailing
             } else if musicManager.isPlaying {
                 musicPlayingIndicator(tint: tint)
             } else {
@@ -238,6 +256,37 @@ struct DynamicIslandView: View {
         }
         .frame(maxWidth: .infinity)
         .animation(stripContentFade, value: compactStripContentSignature)
+    }
+
+    private var compactFocusLeading: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.14), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: focusTimer.progress)
+                .stroke(Color.white.opacity(0.82), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Image(systemName: focusTimer.phase.symbol)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.76))
+        }
+        .frame(width: 20, height: 20)
+    }
+
+    private var compactFocusTrailing: some View {
+        HStack(spacing: 6) {
+            Text(focusTimer.compactStatus)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(Color.white.opacity(0.82))
+                .lineLimit(1)
+
+            Circle()
+                .fill(Color.white.opacity(0.7))
+                .frame(width: 4, height: 4)
+                .scaleEffect(focusTimer.pulse ? 1.6 : 1)
+                .opacity(focusTimer.pulse ? 0.45 : 1)
+        }
     }
 
     private func musicAlbumLeading(tint: Color) -> some View {
@@ -435,6 +484,7 @@ struct DynamicIslandView: View {
             displayMode = .hoverExpanded
         } else if isExpandedByInput
             || visibleKeystrokeToken != nil
+            || focusTimer.isRunning
             || musicManager.isPlaying
         {
             displayMode = .keystrokeExpanded

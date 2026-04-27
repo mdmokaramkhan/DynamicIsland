@@ -11,7 +11,7 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private var panel: IslandPanel?
+    private let dependencies = AppDependencies.shared
     private var statusItem: NSStatusItem?
     private var monitorStatusMenuItem: NSMenuItem?
     private var captureToggleMenuItem: NSMenuItem?
@@ -24,15 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let keystrokeStore = KeystrokePanelStore()
     private let soundPlayer = KeystrokeSoundPlayer()
     private let hitState = IslandHitState()
-    private var mouseMonitor: Any?
-    /// When global mouse monitoring is unavailable (no Accessibility), poll so
-    /// `ignoresMouseEvents` still updates as the cursor moves.
-    private var mousePollTimer: Timer?
-
-    // Onboarding window — retained until the user dismisses it.
-    private var onboardingWindow: NSWindow?
-
     private var settingsWindowManager: SettingsWindowManager?
+    private var panelCoordinator: IslandPanelCoordinator?
+    private var onboardingCoordinator: OnboardingCoordinator?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon, no app-switcher entry — this is a pure overlay.
@@ -40,14 +34,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Pre-warm MusicManager singleton so its controller observers start
         // listening immediately (no crash: singleton is created before any view).
-        _ = MusicManager.shared
+        _ = dependencies.musicController
 
         settingsWindowManager = SettingsWindowManager(activationPolicyOnClose: { [weak self] in
             self?.restoreAccessoryActivationIfAppropriate()
         })
+        onboardingCoordinator = OnboardingCoordinator(onDismiss: { [weak self] in
+            self?.restoreAccessoryActivationIfAppropriate()
+        })
+        panelCoordinator = IslandPanelCoordinator(
+            keyboardMonitor: keyboardMonitor,
+            keystrokeStore: keystrokeStore,
+            musicManager: dependencies.musicController as! MusicManager,
+            hitState: hitState,
+            onOpenSettings: { [weak self] in self?.openSettingsWindow() }
+        )
 
         installStatusItem()
-        installPanel()
+        panelCoordinator?.installPanel()
         keyboardMonitor.onEvent = { [weak self] eventType, event in
             guard let self else { return }
             self.keystrokeStore.process(eventType: eventType, event: event)
@@ -73,11 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Check permissions and show onboarding dialog when needed.
         Task { @MainActor in
-            let pm = PermissionManager.shared
+            let pm = dependencies.permissionProvider as! PermissionManager
             pm.checkAll()
             // Show on first launch OR whenever Accessibility is missing.
             if !pm.isOnboardingComplete || pm.accessibilityMissing {
-                self.showPermissionOnboarding()
+                self.onboardingCoordinator?.show()
             }
         }
     }
@@ -87,62 +91,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         keyboardMonitor.stop()
         keyboardMonitor.onEvent = nil
-        if let monitor = mouseMonitor {
-            NSEvent.removeMonitor(monitor)
-            mouseMonitor = nil
-        }
-        mousePollTimer?.invalidate()
-        mousePollTimer = nil
-    }
-
-    // MARK: - Permission onboarding window
-
-    @MainActor
-    private func showPermissionOnboarding() {
-        guard onboardingWindow == nil else { return }
-
-        // Temporarily become a regular app so the window can be focused/key.
-        NSApp.setActivationPolicy(.regular)
-
-        let view = PermissionOnboardingView { [weak self] in
-            self?.dismissPermissionOnboarding()
-        }
-        let controller = NSHostingController(rootView: view)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 560)
-
-        let window = NSWindow(contentViewController: controller)
-        window.styleMask = [.titled, .closable, .fullSizeContentView]
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
-        window.backgroundColor = .clear
-        window.isOpaque = false
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.setContentSize(NSSize(width: 500, height: 560))
-        window.center()
-        window.level = .floating
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        onboardingWindow = window
-    }
-
-    @MainActor
-    private func dismissPermissionOnboarding() {
-        onboardingWindow?.close()
-        onboardingWindow = nil
-        restoreAccessoryActivationIfAppropriate()
+        panelCoordinator?.tearDown()
     }
 
     /// Returns to an accessory (menu-only) app when no window needs a regular activation policy.
     @MainActor
     private func restoreAccessoryActivationIfAppropriate() {
-        if onboardingWindow != nil { return }
+        if onboardingCoordinator?.isVisible == true { return }
         if settingsWindowManager?.isWindowOpen() == true { return }
         NSApp.setActivationPolicy(.accessory)
     }
-
-    // MARK: - Panel setup
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -290,127 +248,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
     }
 
-    private func installPanel() {
-        let host = NSHostingView(rootView: DynamicIslandView(
-            keyboardMonitor: keyboardMonitor,
-            keystrokeStore: keystrokeStore,
-            musicManager: MusicManager.shared,
-            hitState: hitState,
-            onOpenSettings: { [weak self] in self?.openSettingsWindow() }
-        ))
-        // Do not let hosted SwiftUI report preferred/intrinsic window sizing;
-        // with a borderless NSPanel that would fight AppKit and trigger
-        // “Update Constraints in Window” recursion during layout.
-        host.sizingOptions = []
-        host.frame = NSRect(origin: .zero, size: IslandMetrics.panelSize)
-        host.autoresizingMask = [.width, .height]
-
-        let panel = IslandPanel.make(contentView: host)
-        self.panel = panel
-
-        refreshIslandPanelPresentation()
-
-        // When SwiftUI signals that the island has collapsed back to idle,
-        // re-evaluate whether the panel should ignore mouse events.
-        hitState.onMousePolicyChanged = { [weak self] in
-            self?.updatePanelMouseIgnore()
-        }
-
-        // Start the global mouse monitor that enables the panel when the
-        // cursor enters the pill area and disables it when it leaves.
-        startMouseTracking()
-        updatePanelMouseIgnore()
-    }
 
     @MainActor
     private func openSettingsWindow() {
-        settingsWindowManager?.show(keyboardMonitor: keyboardMonitor)
-    }
-
-    // MARK: - Click-through mouse tracking
-
-    /// Returns the collapsed pill's rect in global screen coordinates
-    /// (AppKit convention: y=0 at bottom of screen).
-    private func pillScreenRect() -> NSRect? {
-        guard let panel else { return nil }
-        let f = panel.frame
-        let sz = hitState.compactHitSize
-        let pw = sz.width
-        let ph = sz.height
-        // Add a small inset buffer so hover triggers slightly before
-        // the cursor reaches the exact pill edge.
-        return NSRect(
-            x: f.midX - pw / 2 - 10,
-            y: f.maxY - ph - 8,
-            width: pw + 20,
-            height: ph + 8
-        )
-    }
-
-    /// Flips `panel.ignoresMouseEvents` based on current cursor position
-    /// and island expansion state. Safe to call at any frequency.
-    private func updatePanelMouseIgnore() {
-        guard let panel else { return }
-        let over = pillScreenRect()?.contains(NSEvent.mouseLocation) ?? false
-        // Full window must accept events only while the hover-expanded panel is up.
-        // Compact strip / idle use a small top-centered rect so the rest of the
-        // The full panel frame stays click-through except the compact hit rect.
-        let shouldIgnore = !over && !hitState.isHoverExpanded
-        if panel.ignoresMouseEvents != shouldIgnore {
-            panel.ignoresMouseEvents = shouldIgnore
-        }
-    }
-
-    private func startMouseTracking() {
-        let mask: NSEvent.EventTypeMask = [
-            .mouseMoved,
-            .leftMouseDragged,
-            .rightMouseDragged,
-            .leftMouseDown,
-            .rightMouseDown,
-            .otherMouseDown,
-        ]
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
-            self?.updatePanelMouseIgnore()
-        }
-
-        if mouseMonitor == nil {
-            mousePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-                self?.updatePanelMouseIgnore()
-            }
-        }
-    }
-
-    private func targetScreen() -> NSScreen? {
-        // Prefer the screen currently containing the mouse cursor's menu bar,
-        // falling back to `main` (the active/focused screen) and finally to
-        // any available screen.
-        NSScreen.main ?? NSScreen.screens.first
-    }
-
-    // MARK: - Screen & Space changes
-
-    /// Keeps the island visible and correctly placed after display changes or
-    /// Mission Control / Space switches (which do not always fire screen-params).
-    private func refreshIslandPanelPresentation() {
-        guard let panel else { return }
-        if let screen = targetScreen() {
-            panel.reposition(on: screen)
-        }
-        panel.orderFrontRegardless()
-        updatePanelMouseIgnore()
+        settingsWindowManager?.show(keyboardMonitor: keyboardMonitor, dependencies: dependencies)
     }
 
     @objc private func screenParametersChanged(_ note: Notification) {
-        refreshIslandPanelPresentation()
+        panelCoordinator?.refreshPresentation()
     }
 
     @objc private func activeSpaceDidChange(_ note: Notification) {
-        refreshIslandPanelPresentation()
-        // Window server may reorder once more after the transition animation.
-        DispatchQueue.main.async { [weak self] in
-            self?.refreshIslandPanelPresentation()
-        }
+        panelCoordinator?.handleActiveSpaceDidChange()
     }
 
     @objc private func openSettingsFromMenu() {

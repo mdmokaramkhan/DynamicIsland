@@ -78,7 +78,8 @@ final class IslandPanel: NSPanel {
             defer: false
         )
 
-        panel.level = .statusBar
+        panel.level = .screenSaver
+        panel.animationBehavior = .none
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false

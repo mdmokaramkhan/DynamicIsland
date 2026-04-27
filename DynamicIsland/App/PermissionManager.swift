@@ -51,7 +51,7 @@ final class PermissionManager: ObservableObject {
 
     // MARK: Onboarding flag
 
-    private static let onboardingKey = "di.permissionOnboardingComplete"
+    private static let onboardingKey = AppSettings.Key.onboardingComplete
 
     var isOnboardingComplete: Bool {
         UserDefaults.standard.bool(forKey: Self.onboardingKey)

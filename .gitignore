@@ -1,3 +1,14 @@
+# Local docs/reference
 notch-project-docs/
-*.wav
-*.mp3
+Sounds/
+Tests/
+
+# Generated/local macOS files
+.DS_Store
+
+# Local build artifacts
+.derivedData/
+DerivedData/
+
+# Optional local IDE folders
+.cursor/

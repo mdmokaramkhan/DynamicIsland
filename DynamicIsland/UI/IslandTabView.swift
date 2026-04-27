@@ -8,27 +8,41 @@ import SwiftUI
 struct IslandTabView: View {
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
     @Binding var isComposingTask: Bool
-    @ObservedObject private var musicManager = MusicManager.shared
-    @ObservedObject private var permissions = PermissionManager.shared
+    @ObservedObject private var musicManager: MusicManager
+    @ObservedObject private var permissions: PermissionManager
+    @ObservedObject private var focusTimer: FocusPandoraTimer
+    private let taskRepository: TaskRepository
 
     /// Opens the app settings in a standard window (not the island).
     var onOpenSettings: () -> Void = {}
 
-    @AppStorage("island.selectedTab") private var selectedTabRaw: String = IslandTab.media.rawValue
-    @AppStorage("island.focusPandora.defaultMinutes") private var focusPandoraMinutes: Int = 25
-    @AppStorage("island.musicControlSlots.v1") private var musicControlSlotsData: Data =
+    @AppStorage(AppSettings.Key.selectedTab) private var selectedTabRaw: String = IslandTab.media.rawValue
+    @AppStorage(AppSettings.Key.musicControlSlotsV1) private var musicControlSlotsData: Data =
         (try? JSONEncoder().encode(MusicControlButton.defaultLayout)) ?? Data()
 
     private var selectedTab: IslandTab {
         IslandTab(rawValue: selectedTabRaw) ?? .media
     }
 
-    @State private var tasks: [IslandTask] = TaskStorage.load()
-    @State private var focusPandoraRemainingSec: Int = 25 * 60
-    @State private var focusPandoraIsRunning: Bool = false
-    @State private var focusPandoraPulse: Bool = false
+    @State private var tasks: [IslandTask]
 
     @Namespace private var tabAnimation
+
+    init(
+        keyboardMonitor: GlobalKeystrokeMonitor,
+        isComposingTask: Binding<Bool>,
+        dependencies: AppDependencies = .shared,
+        onOpenSettings: @escaping () -> Void = {}
+    ) {
+        self.keyboardMonitor = keyboardMonitor
+        _isComposingTask = isComposingTask
+        self.onOpenSettings = onOpenSettings
+        self.musicManager = dependencies.musicController as! MusicManager
+        self.permissions = dependencies.permissionProvider as! PermissionManager
+        self.focusTimer = dependencies.focusTimer as! FocusPandoraTimer
+        self.taskRepository = dependencies.taskRepository
+        _tasks = State(initialValue: dependencies.taskRepository.load())
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -39,15 +53,10 @@ struct IslandTabView: View {
                     IslandNowPlayingView(musicManager: musicManager, musicControlSlots: musicControlSlots)
                         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                 } else if selectedTab == .tasks {
-                    IslandTasksTabView(tasks: $tasks, isComposingTask: $isComposingTask)
+                    IslandTasksTabView(tasks: $tasks, isComposingTask: $isComposingTask, taskRepository: taskRepository)
                         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                 } else if selectedTab == .focusPandora {
-                    IslandFocusTabView(
-                        focusPandoraMinutes: $focusPandoraMinutes,
-                        focusPandoraRemainingSec: $focusPandoraRemainingSec,
-                        focusPandoraIsRunning: $focusPandoraIsRunning,
-                        focusPandoraPulse: $focusPandoraPulse
-                    )
+                    IslandFocusTabView(focusTimer: focusTimer)
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                 }
             }
@@ -66,11 +75,6 @@ struct IslandTabView: View {
         .onChange(of: selectedTabRaw) { _, new in
             if new != IslandTab.tasks.rawValue, isComposingTask {
                 isComposingTask = false
-            }
-        }
-        .onChange(of: focusPandoraMinutes) { _, new in
-            if !focusPandoraIsRunning {
-                focusPandoraRemainingSec = new * 60
             }
         }
     }
