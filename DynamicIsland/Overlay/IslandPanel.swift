@@ -11,8 +11,10 @@ import AppKit
 
 enum IslandMetrics {
     // Panel width matches boringNotch openNotchSize.width (640pt).
-    // Height is taller than the reference to accommodate the expanded tab panel.
-    static let panelSize = CGSize(width: 640, height: 400)
+    // Height must cover the largest hover-expanded layout; locking the NSPanel to
+    // this size avoids NSHostingView↔window constraint feedback (crash in
+    // _postWindowNeedsUpdateConstraints). Do not set smaller than that content.
+    static let panelSize = CGSize(width: 640, height: 700)
 
     // Collapsed pill — must match DynamicIslandView.collapsedSize (click-through).
     static let collapsedSize = CGSize(width: 190, height: 30)
@@ -29,15 +31,31 @@ enum IslandMetrics {
 /// change. AppDelegate observes via the callback to toggle the panel's
 /// `ignoresMouseEvents` — the only compositor-level way to allow clicks to
 /// fall through a transparent overlay window to the apps beneath it.
+/// Only the hover-expanded tab panel uses the full window hit area; idle and
+/// compact strip constrain hits to `compactHitSize` at the top center.
 final class IslandHitState {
-    var isExpanded: Bool = false {
+    /// True only for the hover-opened tab panel. That mode needs the full window
+    /// to receive mouse events (controls + reliable `onHover(false)` to collapse).
+    /// Compact idle / keystroke strip must stay click-through outside the pill.
+    var isHoverExpanded: Bool = false {
         didSet {
-            guard isExpanded != oldValue else { return }
-            onExpansionChanged?(isExpanded)
+            guard isHoverExpanded != oldValue else { return }
+            notifyMousePolicyChanged()
         }
     }
-    /// Called on the main thread whenever `isExpanded` flips.
-    var onExpansionChanged: ((Bool) -> Void)?
+    /// Centered hit target at the top of the panel when not hover-expanded.
+    var compactHitSize: CGSize = IslandMetrics.collapsedSize {
+        didSet {
+            guard compactHitSize != oldValue else { return }
+            notifyMousePolicyChanged()
+        }
+    }
+    /// Called when hover-expanded or compact hit metrics change.
+    var onMousePolicyChanged: (() -> Void)?
+
+    private func notifyMousePolicyChanged() {
+        onMousePolicyChanged?()
+    }
 }
 
 // MARK: - Panel
@@ -60,13 +78,15 @@ final class IslandPanel: NSPanel {
             defer: false
         )
 
-        panel.level = .statusBar
+        panel.level = .screenSaver
+        panel.animationBehavior = .none
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.isMovable = false
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
+        panel.isRestorable = false
         // Start fully click-through; AppDelegate's mouse monitor re-enables
         // interaction only when the cursor enters the collapsed pill area.
         panel.ignoresMouseEvents = true
@@ -80,6 +100,12 @@ final class IslandPanel: NSPanel {
         contentView.frame = panelRect
         contentView.autoresizingMask = [.width, .height]
         panel.contentView = contentView
+        // Fixed content size: prevents SwiftUI’s NSHostingView from animating
+        // the window frame to match intrinsic size (safe area / constraint loop).
+        let fixed = IslandMetrics.panelSize
+        panel.setContentSize(fixed)
+        panel.contentMinSize = fixed
+        panel.contentMaxSize = fixed
         panel.acceptsMouseMovedEvents = true
 
         return panel
