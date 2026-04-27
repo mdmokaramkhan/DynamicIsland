@@ -11,8 +11,10 @@ import AppKit
 
 enum IslandMetrics {
     // Panel width matches boringNotch openNotchSize.width (640pt).
-    // Height is taller than the reference to accommodate the expanded tab panel.
-    static let panelSize = CGSize(width: 640, height: 400)
+    // Height must cover the largest hover-expanded layout; locking the NSPanel to
+    // this size avoids NSHostingView↔window constraint feedback (crash in
+    // _postWindowNeedsUpdateConstraints). Do not set smaller than that content.
+    static let panelSize = CGSize(width: 640, height: 700)
 
     // Collapsed pill — must match DynamicIslandView.collapsedSize (click-through).
     static let collapsedSize = CGSize(width: 190, height: 30)
@@ -97,6 +99,12 @@ final class IslandPanel: NSPanel {
         contentView.frame = panelRect
         contentView.autoresizingMask = [.width, .height]
         panel.contentView = contentView
+        // Fixed content size: prevents SwiftUI’s NSHostingView from animating
+        // the window frame to match intrinsic size (safe area / constraint loop).
+        let fixed = IslandMetrics.panelSize
+        panel.setContentSize(fixed)
+        panel.contentMinSize = fixed
+        panel.contentMaxSize = fixed
         panel.acceptsMouseMovedEvents = true
 
         return panel

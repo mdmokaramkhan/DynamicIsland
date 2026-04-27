@@ -71,6 +71,8 @@ struct DynamicIslandView: View {
     @ObservedObject var keystrokeStore: KeystrokePanelStore
     @ObservedObject var musicManager: MusicManager
     let hitState: IslandHitState
+    /// Presents the standard settings window (not island content).
+    var onOpenSettings: () -> Void = {}
 
     @AppStorage("island.selectedTab") private var selectedTabRaw: String = IslandTab.media.rawValue
 
@@ -197,7 +199,8 @@ struct DynamicIslandView: View {
         } else {
             IslandTabView(
                 keyboardMonitor: keyboardMonitor,
-                isComposingTask: $isComposingTask
+                isComposingTask: $isComposingTask,
+                onOpenSettings: onOpenSettings
             )
         }
     }
@@ -459,7 +462,8 @@ struct DynamicIslandView: View {
         keyboardMonitor: GlobalKeystrokeMonitor(),
         keystrokeStore: KeystrokePanelStore(),
         musicManager: MusicManager.shared,
-        hitState: IslandHitState()
+        hitState: IslandHitState(),
+        onOpenSettings: {}
     )
     .frame(width: 680, height: 400)
     .background(Color.gray.opacity(0.2))

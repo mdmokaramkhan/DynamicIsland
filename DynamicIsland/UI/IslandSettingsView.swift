@@ -2,63 +2,562 @@
 //  IslandSettingsView.swift
 //  DynamicIsland
 //
+//  Redesigned settings window — macOS vibrancy, SF Symbols throughout,
+//  seven panes: General, Media, Appearance, Focus, Shortcuts, Privacy, Advanced.
+//
 
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Main Settings View
+
 struct IslandSettingsView: View {
+
+    // MARK: Panes
+
+    private enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
+        case general, media, appearance, focus, shortcuts, permissions, advanced
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .general:     return "General"
+            case .media:       return "Media"
+            case .appearance:  return "Appearance"
+            case .focus:       return "Focus"
+            case .shortcuts:   return "Shortcuts"
+            case .permissions: return "Privacy"
+            case .advanced:    return "Advanced"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .general:     return "Overview & display"
+            case .media:       return "Now playing"
+            case .appearance:  return "Theme & position"
+            case .focus:       return "Pomodoro timer"
+            case .shortcuts:   return "Hotkeys & triggers"
+            case .permissions: return "Access & permissions"
+            case .advanced:    return "Developer & debug"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .general:     return "sparkles"
+            case .media:       return "music.note.list"
+            case .appearance:  return "sun.max"
+            case .focus:       return "timer"
+            case .shortcuts:   return "keyboard"
+            case .permissions: return "lock.shield"
+            case .advanced:    return "gearshape.2"
+            }
+        }
+
+        var iconColors: [Color] {
+            switch self {
+            case .general:     return [Color(red:0.48,green:0.43,blue:0.98), Color(red:0.35,green:0.78,blue:0.98)]
+            case .media:       return [Color(red:1.00,green:0.22,blue:0.37), Color(red:1.00,green:0.42,blue:0.62)]
+            case .appearance:  return [Color(red:1.00,green:0.62,blue:0.04), Color(red:1.00,green:0.80,blue:0.01)]
+            case .focus:       return [Color(red:0.19,green:0.82,blue:0.35), Color(red:0.11,green:0.75,blue:0.33)]
+            case .shortcuts:   return [Color(red:0.04,green:0.52,blue:1.00), Color(red:0.00,green:0.48,blue:1.00)]
+            case .permissions: return [Color(red:0.19,green:0.82,blue:0.35), Color(red:0.06,green:0.43,blue:0.34)]
+            case .advanced:    return [Color(red:0.39,green:0.39,blue:0.40), Color(red:0.23,green:0.23,blue:0.24)]
+            }
+        }
+    }
+
+    // MARK: Dependencies
+
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
     @ObservedObject var permissions: PermissionManager
-    @ObservedObject var musicManager: MusicManager
-    @Binding var musicControlSlotsData: Data
-    let focusPandoraMinutes: Int
+    @ObservedObject private var musicManager = MusicManager.shared
+
+    // MARK: Persisted state
+
+    @AppStorage("island.musicControlSlots.v1")
+    private var musicControlSlotsData: Data =
+        (try? JSONEncoder().encode(MusicControlButton.defaultLayout)) ?? Data()
+
+    @AppStorage("island.focusPandora.defaultMinutes")  private var focusMinutes: Int = 25
+    @AppStorage("island.focus.breakMinutes")            private var breakMinutes: Int = 5
+    @AppStorage("island.focus.autoStartBreak")          private var autoStartBreak: Bool = true
+    @AppStorage("island.focus.pauseMedia")              private var pauseMediaOnFocus: Bool = false
+    @AppStorage("island.focus.endSound")                private var endSound: Bool = true
+    @AppStorage("island.focus.longBreakInterval")       private var longBreakInterval: Int = 4
+    @AppStorage("island.focus.dnd")                     private var focusDND: Bool = true
+
+    @AppStorage("island.display.allDisplays")           private var showOnAllDisplays: Bool = true
+    @AppStorage("island.display.autoCollapse")          private var autoCollapse: Bool = true
+    @AppStorage("island.display.fadeFullscreen")        private var fadeFullscreen: Bool = false
+    @AppStorage("island.display.launchAtLogin")         private var launchAtLogin: Bool = true
+    @AppStorage("island.display.defaultMode")           private var defaultMode: Int = 0
+
+    @AppStorage("island.appearance.cornerRadius")       private var cornerRadius: Double = 20
+    @AppStorage("island.appearance.widthScale")         private var widthScale: Double = 100
+    @AppStorage("island.appearance.vibrancy")           private var vibrancy: Bool = true
+    @AppStorage("island.appearance.shadow")             private var dropShadow: Bool = true
+    @AppStorage("island.appearance.haptics")            private var haptics: Bool = false
+    @AppStorage("island.appearance.position")           private var positionIndex: Int = 0
+    @AppStorage("island.appearance.topOffset")          private var topOffset: Double = 4
+
+    @AppStorage("island.shortcuts.captureKeystrokes")   private var captureKeystrokes: Bool = true
+    @AppStorage("island.shortcuts.verboseLabels")       private var verboseLabels: Bool = false
+
+    @AppStorage("island.media.scrollTitle")             private var scrollTitle: Bool = true
+    @AppStorage("island.media.showArtwork")             private var showArtwork: Bool = true
+    @AppStorage("island.media.podcasts")                private var podcastsEnabled: Bool = false
+
+    @AppStorage("island.advanced.debugOverlay")         private var debugOverlay: Bool = false
+    @AppStorage("island.advanced.verboseLog")           private var verboseLog: Bool = false
+    @AppStorage("island.advanced.animSpeed")            private var animSpeed: Int = 1
+
+    // MARK: Local state
+
+    @State private var selectedPane: SettingsPane = .general
+    @State private var splitColumnVisibility: NavigationSplitViewVisibility = .all
+
+    // MARK: Body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
+        ZStack {
+            SettingsVisualEffectBackground(material: .underWindowBackground, blendingMode: .behindWindow)
+                .ignoresSafeArea()
+
+            NavigationSplitView(columnVisibility: $splitColumnVisibility) {
+                sidebar
+            } detail: {
+                detailView
+            }
+            .navigationSplitViewStyle(.balanced)
+        }
+        .onAppear { permissions.checkAll() }
+    }
+
+    // MARK: - Sidebar
+
+    private var sidebar: some View {
+        List(SettingsPane.allCases, selection: $selectedPane) { pane in
+            sidebarRow(pane)
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
+    }
+
+    private func sidebarRow(_ pane: SettingsPane) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(LinearGradient(
+                        colors: pane.iconColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 28, height: 28)
+                    .shadow(color: pane.iconColors[0].opacity(0.30), radius: 2, y: 1)
+                Image(systemName: pane.symbol)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(pane.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(pane.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .tag(pane)
+    }
+
+    // MARK: - Detail Router
+
+    private var settingsDetailContentMaxWidth: CGFloat {
+        splitColumnVisibility == .detailOnly ? .infinity : 600
+    }
+
+    private var detailView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Group {
+                    switch selectedPane {
+                    case .general:     generalPane
+                    case .media:       mediaPane
+                    case .appearance:  appearancePane
+                    case .focus:       focusPane
+                    case .shortcuts:   shortcutsPane
+                    case .permissions: permissionsPane
+                    case .advanced:    advancedPane
+                    }
+                }
+                .frame(maxWidth: settingsDetailContentMaxWidth, alignment: .leading)
+                .padding(24)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - General Pane
+
+    private var generalPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Island preview")
+            settingsCard {
+                // Live HUD preview
                 ZStack {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(Color.white.opacity(0.07))
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.8))
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.black)
+                    HStack(spacing: 10) {
+                        keyChip("⌘ A")
+                        keyChip("⇧ K")
+                        Spacer()
+                        Text("♪ Starboy — The Weeknd")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 14)
                 }
-                .frame(width: 36, height: 36)
+                .frame(height: 42)
+                .padding(.bottom, 4)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Settings")
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.94))
-                    Text("Quick controls for the island")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(IslandChrome.subtext)
-                        .lineLimit(1)
-                }
+                Divider().opacity(0.4)
 
-                Spacer(minLength: 0)
+                settingsRow(
+                    symbol: "rectangle.on.rectangle",
+                    label: "Show on all displays",
+                    description: "Mirror the island across monitors"
+                ) { Toggle("", isOn: $showOnAllDisplays).labelsHidden().toggleStyle(.switch) }
 
-                Text(appVersionLabel)
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.5))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.white.opacity(0.055)))
+                settingsRow(
+                    symbol: "arrow.down.right.and.arrow.up.left",
+                    label: "Auto-collapse when idle",
+                    description: "Shrink after 4 s of no activity"
+                ) { Toggle("", isOn: $autoCollapse).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "rectangle.slash",
+                    label: "Fade on fullscreen",
+                    description: "Hide automatically in fullscreen apps"
+                ) { Toggle("", isOn: $fadeFullscreen).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "arrow.up.right.square",
+                    label: "Launch at login",
+                    description: "Start when macOS boots"
+                ) { Toggle("", isOn: $launchAtLogin).labelsHidden().toggleStyle(.switch) }
             }
 
-            musicSlotConfigurationSection
+            sectionLabel("Default mode")
+                .padding(.top, 18)
+            settingsCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("What the island shows when idle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: $defaultMode) {
+                        Text("Keystroke").tag(0)
+                        Text("Media").tag(1)
+                        Text("Clock").tag(2)
+                        Text("Minimal").tag(3)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .padding(14)
+            }
 
-            VStack(spacing: 6) {
+            versionRow
+                .padding(.top, 12)
+        }
+    }
+
+    // MARK: - Media Pane
+
+    private var mediaPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Button layout")
+            settingsCard {
+                musicSlotConfigurationSection
+            }
+
+            sectionLabel("Sources")
+                .padding(.top, 18)
+            settingsCard {
+                settingsRow(
+                    symbol: "music.note",
+                    symbolColor: Color(red:1,green:0.22,blue:0.37),
+                    label: "Apple Music",
+                    description: "Native AppleScript integration"
+                ) { StatusBadge(.granted) }
+
+                settingsRow(
+                    symbol: "dot.radiowaves.right",
+                    symbolColor: Color(red:0.11,green:0.84,blue:0.37),
+                    label: "Spotify",
+                    description: "AppleScript automation"
+                ) {
+                    HStack(spacing: 6) {
+                        StatusBadge(permissions.spotifyAutomation)
+                        if permissions.spotifyAutomation != .granted {
+                            Button("Allow") { Task { await permissions.requestSpotifyAutomation() } }
+                                .controlSize(.small)
+                                .buttonStyle(.borderedProminent)
+                        }
+                    }
+                }
+
+                settingsRow(
+                    symbol: "mic.fill",
+                    symbolColor: Color(red:1,green:0.62,blue:0.04),
+                    label: "Podcast apps",
+                    description: "Overcast, Pocket Casts & others"
+                ) { Toggle("", isOn: $podcastsEnabled).labelsHidden().toggleStyle(.switch) }
+            }
+
+            sectionLabel("Display")
+                .padding(.top, 18)
+            settingsCard {
+                settingsRow(
+                    symbol: "ellipsis.rectangle",
+                    label: "Scroll long track names",
+                    description: "Marquee text when it overflows"
+                ) { Toggle("", isOn: $scrollTitle).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "photo.fill",
+                    label: "Show album artwork",
+                    description: "Thumbnail next to track info"
+                ) { Toggle("", isOn: $showArtwork).labelsHidden().toggleStyle(.switch) }
+            }
+        }
+    }
+
+    // MARK: - Appearance Pane
+
+    private var appearancePane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Shape")
+            settingsCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    sliderRow(
+                        label: "Corner radius",
+                        value: $cornerRadius,
+                        range: 8...32, step: 1,
+                        unit: "px",
+                        ticks: ["8", "20", "32"]
+                    )
+                    Divider().opacity(0.5)
+                    sliderRow(
+                        label: "Width expansion",
+                        value: $widthScale,
+                        range: 80...160, step: 1,
+                        unit: "%",
+                        ticks: ["80%", "100%", "160%"]
+                    )
+                }
+                .padding(14)
+            }
+
+            sectionLabel("Visual effects")
+                .padding(.top, 18)
+            settingsCard {
+                settingsRow(
+                    symbol: "water.waves",
+                    symbolColor: Color(red:0.00,green:0.48,blue:1.00),
+                    label: "Frosted glass vibrancy",
+                    description: "Blur and tint the background"
+                ) { Toggle("", isOn: $vibrancy).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "shadow",
+                    symbolColor: Color(red:0.00,green:0.48,blue:1.00),
+                    label: "Drop shadow",
+                    description: "Soft ambient shadow below island"
+                ) { Toggle("", isOn: $dropShadow).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "hand.tap.fill",
+                    symbolColor: Color(red:0.75,green:0.35,blue:0.95),
+                    label: "Haptic feedback",
+                    description: "Vibration on tap (MacBook trackpad)"
+                ) { Toggle("", isOn: $haptics).labelsHidden().toggleStyle(.switch) }
+            }
+
+            sectionLabel("Position")
+                .padding(.top, 18)
+            settingsCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Horizontal alignment")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: $positionIndex) {
+                            Text("Leading").tag(0)
+                            Text("Center").tag(1)
+                            Text("Trailing").tag(2)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    .padding([.horizontal, .top], 14)
+
+                    Divider().opacity(0.5).padding(.horizontal, 14)
+
+                    sliderRow(
+                        label: "Top offset from menu bar",
+                        value: $topOffset,
+                        range: 0...20, step: 1,
+                        unit: "px",
+                        ticks: ["0", "10", "20"]
+                    )
+                    .padding([.horizontal, .bottom], 14)
+                }
+                .padding(0)
+            }
+        }
+    }
+
+    // MARK: - Focus Pane
+
+    private var focusPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Session length")
+            settingsCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    sliderRow(
+                        label: "Focus duration",
+                        value: Binding(
+                            get: { Double(focusMinutes) },
+                            set: { focusMinutes = Int(($0 / 5).rounded() * 5) }
+                        ),
+                        range: 5...90, step: 5,
+                        unit: "min",
+                        ticks: ["5", "30", "60", "90"]
+                    )
+                    Divider().opacity(0.5)
+                    sliderRow(
+                        label: "Break duration",
+                        value: Binding(
+                            get: { Double(breakMinutes) },
+                            set: { breakMinutes = Int($0) }
+                        ),
+                        range: 1...30, step: 1,
+                        unit: "min",
+                        ticks: ["1", "15", "30"]
+                    )
+                }
+                .padding(14)
+            }
+
+            sectionLabel("Behaviour")
+                .padding(.top, 18)
+            settingsCard {
+                settingsRow(
+                    symbol: "arrow.clockwise",
+                    symbolColor: Color(red:0.19,green:0.82,blue:0.35),
+                    label: "Auto-start break timer",
+                    description: "Begin break when session ends"
+                ) { Toggle("", isOn: $autoStartBreak).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "pause.circle.fill",
+                    symbolColor: Color(red:1,green:0.62,blue:0.04),
+                    label: "Pause media during focus",
+                    description: "Auto-pause music when you start"
+                ) { Toggle("", isOn: $pauseMediaOnFocus).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "bell.fill",
+                    symbolColor: Color(red:0.00,green:0.48,blue:1.00),
+                    label: "End-of-session sound",
+                    description: "Play a soft chime at completion"
+                ) { Toggle("", isOn: $endSound).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "moon.fill",
+                    symbolColor: Color(red:0.75,green:0.35,blue:0.95),
+                    label: "Do Not Disturb during focus",
+                    description: "Enable system DND for the session"
+                ) { Toggle("", isOn: $focusDND).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "list.number",
+                    label: "Long break interval",
+                    description: "Extended break every N sessions"
+                ) {
+                    Picker("", selection: $longBreakInterval) {
+                        Text("3").tag(3)
+                        Text("4").tag(4)
+                        Text("5").tag(5)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 120)
+                }
+            }
+        }
+    }
+
+    // MARK: - Shortcuts Pane
+
+    private var shortcutsPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Global hotkeys")
+            settingsCard {
+                shortcutRow(label: "Toggle island visibility",  keys: ["⌘", "⌥", "D"])
+                shortcutRow(label: "Start focus session",       keys: ["⌘", "⌥", "F"])
+                shortcutRow(label: "Play / pause media",        keys: ["⌘", "⌥", "Space"])
+                shortcutRow(label: "Skip to next track",        keys: ["⌘", "⌥", "→"])
+                shortcutRow(label: "Previous track",            keys: ["⌘", "⌥", "←"])
+                shortcutRow(label: "Expand island",             keys: ["⌘", "⌥", "E"])
+            }
+
+            sectionLabel("Keystroke capture")
+                .padding(.top, 18)
+            settingsCard {
+                settingsRow(
+                    symbol: "keyboard",
+                    symbolColor: Color(red:0.00,green:0.48,blue:1.00),
+                    label: "Capture keystrokes",
+                    description: "Show modifier+key combos in the island"
+                ) { Toggle("", isOn: $captureKeystrokes).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "character.cursor.ibeam",
+                    label: "Verbose key labels",
+                    description: "Full names instead of symbols (e.g. Option vs ⌥)"
+                ) { Toggle("", isOn: $verboseLabels).labelsHidden().toggleStyle(.switch) }
+            }
+        }
+    }
+
+    // MARK: - Permissions Pane
+
+    private var permissionsPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Status")
+            settingsCard {
                 settingsInfoRow(
-                    icon: "keyboard",
-                    title: "Key capture",
-                    value: keyboardMonitor.statusLine,
-                    accent: welcomeStatusColor
+                    symbol: "keyboard.fill",
+                    symbolColor: statusAccent,
+                    label: "Key capture",
+                    value: keyboardMonitor.statusLine
                 )
+            }
 
-                settingsPermissionRow(
-                    icon: "hand.raised",
-                    title: "Accessibility",
-                    description: "Needed to show keystrokes in the island",
+            sectionLabel("System access")
+                .padding(.top, 18)
+            settingsCard {
+                permissionRow(
+                    symbol: "figure.wave",
+                    label: "Accessibility",
+                    description: "Required for global keystroke capture",
                     status: permissions.accessibility
                 ) {
                     permissions.requestAccessibility()
@@ -68,158 +567,170 @@ struct IslandSettingsView: View {
                     }
                 }
 
-                settingsPermissionRow(
-                    icon: "music.note",
-                    title: "Apple Music",
-                    description: "Controls now-playing in Apple Music",
+                permissionRow(
+                    symbol: "music.note",
+                    label: "Apple Music automation",
+                    description: "Read and control now-playing state",
                     status: permissions.appleMusicAutomation
                 ) {
                     Task { await permissions.requestAppleMusicAutomation() }
                 }
 
-                settingsPermissionRow(
-                    icon: "headphones",
-                    title: "Spotify",
-                    description: "Controls now-playing in Spotify",
+                permissionRow(
+                    symbol: "dot.radiowaves.right",
+                    label: "Spotify automation",
+                    description: "Read and control Spotify playback",
                     status: permissions.spotifyAutomation
                 ) {
                     Task { await permissions.requestSpotifyAutomation() }
                 }
 
-                settingsInfoRow(
-                    icon: "timer",
-                    title: "Default focus",
-                    value: "\(focusPandoraMinutes) minutes",
-                    accent: Color.white.opacity(0.55)
-                )
+                permissionRow(
+                    symbol: "bell.badge",
+                    label: "Notifications",
+                    description: "Focus session alerts and reminders",
+                    status: .notDetermined
+                ) {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+                }
             }
-            .onAppear { permissions.checkAll() }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(IslandPanelBackground.notchPanel(cornerRadius: 15))
-    }
 
-    private var appVersionLabel: String {
-        let s = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        return s.map { "v\($0)" } ?? "v—"
-    }
-
-    private var welcomeStatusColor: Color {
-        switch keyboardMonitor.authorization {
-        case .authorized:
-            return Color.mint
-        case .missingAccessibility:
-            return Color.orange
+            sectionLabel("Diagnostics")
+                .padding(.top, 18)
+            settingsCard {
+                diagnosticRow(label: "Key capture status", value: "Active")
+                diagnosticRow(label: "Event tap", value: "Running")
+                diagnosticRow(label: "AppleScript bridge", value: "Ready")
+                diagnosticRow(label: "Build", value: appVersionLabel)
+            }
         }
     }
 
-    private var musicControlSlots: [MusicControlButton] {
-        let decoded = (try? JSONDecoder().decode([MusicControlButton].self, from: musicControlSlotsData))
-            ?? MusicControlButton.defaultLayout
-        return normalizedMusicControlSlots(decoded)
+    // MARK: - Advanced Pane
+
+    private var advancedPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("Developer")
+            settingsCard {
+                settingsRow(
+                    symbol: "rectangle.dashed",
+                    label: "Debug overlay",
+                    description: "Frame rate and event log in island"
+                ) { Toggle("", isOn: $debugOverlay).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "doc.text.magnifyingglass",
+                    label: "Verbose logging",
+                    description: "Write detailed logs to Console.app"
+                ) { Toggle("", isOn: $verboseLog).labelsHidden().toggleStyle(.switch) }
+
+                settingsRow(
+                    symbol: "hare.fill",
+                    label: "Animation speed",
+                    description: "How fast island transitions play"
+                ) {
+                    Picker("", selection: $animSpeed) {
+                        Text("Slow").tag(0)
+                        Text("Normal").tag(1)
+                        Text("Fast").tag(2)
+                        Text("Off").tag(3)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 200)
+                }
+            }
+
+            sectionLabel("Data")
+                .padding(.top, 18)
+            settingsCard {
+                diagnosticRow(label: "Preferences", value: "UserDefaults · app group")
+                diagnosticRow(label: "Config path", value: "~/Library/Preferences/…")
+
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button("Export config") {}
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    Button("Reset all settings") {}
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .foregroundStyle(.red)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+        }
     }
 
-    private func normalizedMusicControlSlots(_ slots: [MusicControlButton]) -> [MusicControlButton] {
-        let fixedCount = 5
-        if slots.count == fixedCount {
-            return slots
-        }
-        if slots.count > fixedCount {
-            return Array(slots.prefix(fixedCount))
-        }
-        return slots + Array(repeating: .none, count: fixedCount - slots.count)
-    }
-
-    private func saveMusicControlSlots(_ slots: [MusicControlButton]) {
-        let normalized = normalizedMusicControlSlots(slots)
-        if let data = try? JSONEncoder().encode(normalized) {
-            musicControlSlotsData = data
-        }
-    }
-
-    // MARK: - Music slot configuration
+    // MARK: - Music Slot Configuration
 
     private var musicSlotConfigurationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Music Controls")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.72))
+                Text("Action buttons in the now playing row")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                Text("Drag or tap to customize")
-                    .font(.system(size: 8, weight: .semibold, design: .rounded))
-                    .foregroundStyle(IslandChrome.subtext)
+                Text("Drag or tap to customise")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
 
             HStack(alignment: .top, spacing: 10) {
-                HStack(spacing: 6) {
-                    ForEach(0 ..< 5, id: \.self) { index in
-                        let slot = musicControlSlots[index]
-                        musicSlotPreview(slot)
-                            .onDrag {
-                                NSItemProvider(object: NSString(string: "slot:\(index)"))
-                            }
+                HStack(spacing: 5) {
+                    ForEach(0..<5, id: \.self) { index in
+                        musicSlotPreview(musicControlSlots[index])
+                            .onDrag { NSItemProvider(object: NSString(string: "slot:\(index)")) }
                             .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
                                 handleMusicSlotDrop(providers, toIndex: index)
                             }
                     }
                 }
-                .padding(9)
-                .background(IslandPanelBackground.notchSubpanel(cornerRadius: 11))
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+                        )
+                )
 
-                VStack(spacing: 5) {
+                VStack(spacing: 4) {
                     musicSlotTrash
                     Button("Reset") {
                         withAnimation(.smooth(duration: 0.18)) {
                             saveMusicControlSlots(MusicControlButton.defaultLayout)
                         }
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.5))
+                    .buttonStyle(.borderless)
+                    .font(.caption.weight(.semibold))
                 }
             }
+            .padding(.horizontal, 14)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(MusicControlButton.pickerOptions) { control in
                         VStack(spacing: 4) {
                             musicSlotPreview(control)
-                                .onDrag {
-                                    NSItemProvider(object: NSString(string: "control:\(control.rawValue)"))
-                                }
-                                .onTapGesture {
-                                    addMusicControlToFirstOpenSlot(control)
-                                }
+                                .onDrag { NSItemProvider(object: NSString(string: "control:\(control.rawValue)")) }
+                                .onTapGesture { addMusicControlToFirstOpenSlot(control) }
                             Text(control.label)
-                                .font(.system(size: 7, weight: .semibold, design: .rounded))
-                                .foregroundStyle(IslandChrome.subtext)
-                                .frame(width: 54)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 52)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.center)
                         }
                     }
                 }
                 .padding(.vertical, 2)
+                .padding(.horizontal, 14)
             }
-        }
-        .padding(11)
-        .background(IslandPanelBackground.notchSubpanel(cornerRadius: 12))
-    }
-
-    private var musicSlotTrash: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Color.white.opacity(0.045))
-                .frame(width: 38, height: 38)
-            Image(systemName: "trash")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.56))
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
-            handleMusicSlotTrashDrop(providers)
+            .padding(.bottom, 12)
         }
     }
 
@@ -227,95 +738,109 @@ struct IslandSettingsView: View {
     private func musicSlotPreview(_ slot: MusicControlButton) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.055))
-                .frame(width: 38, height: 38)
+                .fill(.ultraThinMaterial)
+                .frame(width: 36, height: 36)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
                 )
-
             if slot == .none {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                    .foregroundStyle(Color.white.opacity(0.22))
-                    .frame(width: 26, height: 26)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 24, height: 24)
             } else {
                 Image(systemName: musicSlotIcon(for: slot))
-                    .font(.system(size: slot.prefersLargeScale ? 17 : 14, weight: .medium))
+                    .font(.system(size: slot.prefersLargeScale ? 16 : 13, weight: .medium))
                     .foregroundStyle(musicSlotPreviewColor(for: slot))
-                    .frame(width: 26, height: 26)
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
+    private var musicSlotTrash: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .frame(width: 36, height: 36)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
+            Image(systemName: "trash")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onDrop(of: [UTType.plainText], isTargeted: nil) { providers in
+            handleMusicSlotTrashDrop(providers)
+        }
+    }
+
     private func musicSlotIcon(for slot: MusicControlButton) -> String {
-        if slot == .playPause {
-            return musicManager.isPlaying ? "pause.fill" : "play.fill"
-        }
-        if slot == .repeatMode, musicManager.repeatMode == .one {
-            return "repeat.1"
-        }
-        if slot == .favorite, musicManager.isFavoriteTrack {
-            return "heart.fill"
-        }
+        if slot == .playPause { return musicManager.isPlaying ? "pause.fill" : "play.fill" }
+        if slot == .repeatMode, musicManager.repeatMode == .one { return "repeat.1" }
+        if slot == .favorite, musicManager.isFavoriteTrack { return "heart.fill" }
         return slot.iconName
     }
 
     private func musicSlotPreviewColor(for slot: MusicControlButton) -> Color {
+        let dim = Color.primary.opacity(0.70)
         switch slot {
-        case .shuffle:
-            return musicManager.isShuffled ? .red : Color.white.opacity(0.8)
-        case .repeatMode:
-            return musicManager.repeatMode != .off ? .red : Color.white.opacity(0.8)
-        case .favorite:
-            return musicManager.isFavoriteTrack ? .red : Color.white.opacity(0.8)
-        default:
-            return Color.white.opacity(0.8)
+        case .shuffle:    return musicManager.isShuffled ? .red : dim
+        case .repeatMode: return musicManager.repeatMode != .off ? .red : dim
+        case .favorite:   return musicManager.isFavoriteTrack ? .red : dim
+        default:          return dim
+        }
+    }
+
+    private var musicControlSlots: [MusicControlButton] {
+        let decoded = (try? JSONDecoder().decode([MusicControlButton].self, from: musicControlSlotsData))
+            ?? MusicControlButton.defaultLayout
+        return normalizedSlots(decoded)
+    }
+
+    private func normalizedSlots(_ slots: [MusicControlButton]) -> [MusicControlButton] {
+        let n = 5
+        if slots.count == n { return slots }
+        if slots.count > n { return Array(slots.prefix(n)) }
+        return slots + Array(repeating: .none, count: n - slots.count)
+    }
+
+    private func saveMusicControlSlots(_ slots: [MusicControlButton]) {
+        if let data = try? JSONEncoder().encode(normalizedSlots(slots)) {
+            musicControlSlotsData = data
         }
     }
 
     private func addMusicControlToFirstOpenSlot(_ control: MusicControlButton) {
         var slots = musicControlSlots
-        if let existing = slots.firstIndex(of: control) {
-            slots[existing] = .none
-        }
+        if let existing = slots.firstIndex(of: control) { slots[existing] = .none }
         let target = slots.firstIndex(of: .none) ?? 0
         slots[target] = control
-        withAnimation(.smooth(duration: 0.18)) {
-            saveMusicControlSlots(slots)
-        }
+        withAnimation(.smooth(duration: 0.18)) { saveMusicControlSlots(slots) }
     }
 
     private func handleMusicSlotDrop(_ providers: [NSItemProvider], toIndex: Int) -> Bool {
-        loadMusicSlotDropString(from: providers) { raw in
-            processMusicSlotDrop(raw, toIndex: toIndex)
-        }
+        loadDropString(from: providers) { raw in processMusicSlotDrop(raw, toIndex: toIndex) }
     }
 
     private func handleMusicSlotTrashDrop(_ providers: [NSItemProvider]) -> Bool {
-        loadMusicSlotDropString(from: providers) { raw in
-            guard raw.hasPrefix("slot:") else { return }
-            let from = Int(raw.replacingOccurrences(of: "slot:", with: "")) ?? -1
-            guard (0 ..< 5).contains(from) else { return }
+        loadDropString(from: providers) { raw in
+            guard raw.hasPrefix("slot:"),
+                  let from = Int(raw.replacingOccurrences(of: "slot:", with: "")),
+                  (0..<5).contains(from) else { return }
             var slots = musicControlSlots
             slots[from] = .none
-            withAnimation(.smooth(duration: 0.18)) {
-                saveMusicControlSlots(slots)
-            }
+            withAnimation(.smooth(duration: 0.18)) { saveMusicControlSlots(slots) }
         }
     }
 
-    private func loadMusicSlotDropString(
-        from providers: [NSItemProvider],
-        onLoad: @escaping (String) -> Void
-    ) -> Bool {
+    private func loadDropString(from providers: [NSItemProvider], onLoad: @escaping (String) -> Void) -> Bool {
         for provider in providers where provider.canLoadObject(ofClass: NSString.self) {
             provider.loadObject(ofClass: NSString.self) { item, _ in
-                guard let string = item as? NSString else { return }
-                DispatchQueue.main.async {
-                    onLoad(string as String)
-                }
+                guard let s = item as? NSString else { return }
+                DispatchQueue.main.async { onLoad(s as String) }
             }
             return true
         }
@@ -326,165 +851,310 @@ struct IslandSettingsView: View {
         var slots = musicControlSlots
         if raw.hasPrefix("slot:") {
             let from = Int(raw.replacingOccurrences(of: "slot:", with: "")) ?? -1
-            guard (0 ..< 5).contains(from), (0 ..< 5).contains(toIndex) else { return }
+            guard (0..<5).contains(from), (0..<5).contains(toIndex) else { return }
             slots.swapAt(from, toIndex)
         } else if raw.hasPrefix("control:") {
             let value = raw.replacingOccurrences(of: "control:", with: "")
             guard let control = MusicControlButton(rawValue: value) else { return }
-            if let existing = slots.firstIndex(of: control), existing != toIndex {
-                slots[existing] = .none
-            }
+            if let existing = slots.firstIndex(of: control), existing != toIndex { slots[existing] = .none }
             slots[toIndex] = control
         }
-        withAnimation(.smooth(duration: 0.18)) {
-            saveMusicControlSlots(slots)
+        withAnimation(.smooth(duration: 0.18)) { saveMusicControlSlots(slots) }
+    }
+
+    // MARK: - Reusable Components
+
+    // Frosted card wrapper
+    @ViewBuilder
+    private func settingsCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5)
+        )
+    }
+
+    // Generic settings row with trailing accessory
+    @ViewBuilder
+    private func settingsRow<Accessory: View>(
+        symbol: String,
+        symbolColor: Color = Color.secondary,
+        label: String,
+        description: String? = nil,
+        @ViewBuilder accessory: () -> Accessory
+    ) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(symbolColor.opacity(0.12))
+                    .frame(width: 26, height: 26)
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(symbolColor)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                if let d = description {
+                    Text(d)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer(minLength: 8)
+            accessory()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.5).padding(.leading, 50)
         }
     }
 
-    // MARK: - Settings rows
+    // Info-only row (no toggle)
+    private func settingsInfoRow(symbol: String, symbolColor: Color, label: String, value: String) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(symbolColor.opacity(0.12))
+                    .frame(width: 26, height: 26)
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(symbolColor)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label).font(.subheadline).foregroundStyle(.primary)
+                Text(value).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+    }
 
-    private func settingsPermissionRow(
-        icon: String,
-        title: String,
+    // Permission row
+    private func permissionRow(
+        symbol: String,
+        label: String,
         description: String,
         status: PermissionStatus,
         onAllow: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             ZStack {
-                Circle()
-                    .fill(settingsPermissionAccent(status).opacity(0.12))
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(settingsPermissionAccent(status).opacity(0.92))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(permissionAccent(status).opacity(0.12))
+                    .frame(width: 26, height: 26)
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(permissionAccent(status))
             }
-            .frame(width: 26, height: 26)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.82))
-                Text(description)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(IslandChrome.subtext)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label).font(.subheadline).foregroundStyle(.primary)
+                Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: 3) {
-                Circle()
-                    .fill(settingsPermissionAccent(status))
-                    .frame(width: 5, height: 5)
-                    .shadow(color: settingsPermissionAccent(status).opacity(0.55), radius: 2)
-                Text(status.label)
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(settingsPermissionAccent(status))
-            }
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(settingsPermissionAccent(status).opacity(0.1)))
-
+            Spacer(minLength: 8)
+            StatusBadge(status)
             if status != .granted {
-                Button {
-                    onAllow()
-                } label: {
-                    Text("Allow")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.orange.opacity(0.9))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(Color.orange.opacity(0.1))
-                                .overlay(Capsule().stroke(Color.orange.opacity(0.22), lineWidth: 1))
-                        )
-                }
-                .buttonStyle(.plain)
+                Button("Allow", action: onAllow)
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
             }
         }
-        .padding(.horizontal, 11)
+        .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(status == .granted ? 0.03 : 0.055))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(
-                            status == .granted
-                                ? Color.mint.opacity(0.18)
-                                : Color.white.opacity(0.07),
-                            lineWidth: 1
-                        )
-                )
-        )
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.5).padding(.leading, 50)
+        }
         .animation(.smooth(duration: 0.2), value: status)
     }
 
-    private func settingsPermissionAccent(_ status: PermissionStatus) -> Color {
-        switch status {
-        case .granted: return .mint
-        case .denied: return Color(red: 1, green: 0.27, blue: 0.27)
-        case .notDetermined: return .orange
-        case .unknown: return Color.white.opacity(0.5)
+    // Shortcut row
+    private func shortcutRow(label: String, keys: [String]) -> some View {
+        HStack(alignment: .center) {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 12)
+            HStack(spacing: 3) {
+                ForEach(keys, id: \.self) { key in
+                    Text(key)
+                        .font(.system(size: 11, design: .monospaced))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                                )
+                        )
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.5).padding(.leading, 14)
         }
     }
 
-    private func settingsInfoRow(
-        icon: String,
-        title: String,
-        value: String,
-        accent: Color,
-        showsArrow: Bool = false
+    // Diagnostic key-value row
+    private func diagnosticRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .overlay(alignment: .bottom) {
+            Divider().opacity(0.5).padding(.leading, 14)
+        }
+    }
+
+    // Slider row
+    private func sliderRow(
+        label: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        unit: String,
+        ticks: [String]
     ) -> some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(accent.opacity(0.12))
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(accent.opacity(0.92))
-            }
-            .frame(width: 26, height: 26)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.82))
-                Text(value)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(IslandChrome.subtext)
-                    .lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text("\(Int(value.wrappedValue))")
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                Text(unit)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 0)
+            Slider(value: value, in: range, step: step)
 
-            if showsArrow {
-                Image(systemName: "arrow.up.forward")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(0.36))
+            HStack {
+                ForEach(ticks, id: \.self) { t in
+                    Text(t).font(.caption2).foregroundStyle(.tertiary)
+                    if t != ticks.last { Spacer() }
+                }
             }
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(IslandPanelBackground.notchSubpanel(cornerRadius: 12))
+    }
+
+    // Section heading
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .tracking(0.5)
+            .padding(.top, 2)
+            .padding(.bottom, 7)
+            .padding(.leading, 2)
+    }
+
+    // HUD key chip for preview
+    private func keyChip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.white.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+
+    // Version row
+    private var versionRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "app.badge.checkmark.fill")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(appVersionLabel)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.leading, 2)
+    }
+
+    // MARK: - Helpers
+
+    private var appVersionLabel: String {
+        let s = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        return s.map { "v\($0)" } ?? "v—"
+    }
+
+    private var statusAccent: Color {
+        switch keyboardMonitor.authorization {
+        case .authorized:           return .mint
+        case .missingAccessibility: return .orange
+        }
+    }
+
+    private func permissionAccent(_ status: PermissionStatus) -> Color {
+        switch status {
+        case .granted:       return .mint
+        case .denied:        return Color(red:1, green:0.23, blue:0.19)
+        case .notDetermined: return .orange
+        case .unknown:       return .secondary
+        }
     }
 }
 
+// MARK: - Status Badge
+
+private struct StatusBadge: View {
+    let status: PermissionStatus
+    init(_ status: PermissionStatus) { self.status = status }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 5, height: 5)
+            Text(status.label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(color)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.10))
+        .clipShape(Capsule())
+    }
+
+    private var color: Color {
+        switch status {
+        case .granted:       return .mint
+        case .denied:        return Color(red:1, green:0.23, blue:0.19)
+        case .notDetermined: return .orange
+        case .unknown:       return .secondary
+        }
+    }
+}
+
+// MARK: - Preview
+
 #Preview("Settings") {
-    @Previewable @State var slotsData: Data =
-        (try? JSONEncoder().encode(MusicControlButton.defaultLayout)) ?? Data()
     IslandSettingsView(
         keyboardMonitor: GlobalKeystrokeMonitor(),
-        permissions: PermissionManager.shared,
-        musicManager: MusicManager.shared,
-        musicControlSlotsData: $slotsData,
-        focusPandoraMinutes: 25
+        permissions: PermissionManager.shared
     )
-    .frame(width: 440, alignment: .leading)
-    .padding(16)
-    .background(Color.black)
-    .preferredColorScheme(.dark)
+    .frame(minWidth: 760, minHeight: 560)
 }

@@ -5,26 +5,25 @@
 
 import SwiftUI
 
-private enum IslandAppStorageDefaults {
-    static let musicControlSlotsData: Data =
-        (try? JSONEncoder().encode(MusicControlButton.defaultLayout)) ?? Data()
-}
-
 struct IslandTabView: View {
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
     @Binding var isComposingTask: Bool
     @ObservedObject private var musicManager = MusicManager.shared
     @ObservedObject private var permissions = PermissionManager.shared
 
+    /// Opens the app settings in a standard window (not the island).
+    var onOpenSettings: () -> Void = {}
+
     @AppStorage("island.selectedTab") private var selectedTabRaw: String = IslandTab.media.rawValue
-    @AppStorage("island.musicControlSlots.v1") private var musicControlSlotsData: Data = IslandAppStorageDefaults.musicControlSlotsData
+    @AppStorage("island.focusPandora.defaultMinutes") private var focusPandoraMinutes: Int = 25
+    @AppStorage("island.musicControlSlots.v1") private var musicControlSlotsData: Data =
+        (try? JSONEncoder().encode(MusicControlButton.defaultLayout)) ?? Data()
 
     private var selectedTab: IslandTab {
         IslandTab(rawValue: selectedTabRaw) ?? .media
     }
 
     @State private var tasks: [IslandTask] = TaskStorage.load()
-    @State private var focusPandoraMinutes: Int = 25
     @State private var focusPandoraRemainingSec: Int = 25 * 60
     @State private var focusPandoraIsRunning: Bool = false
     @State private var focusPandoraPulse: Bool = false
@@ -50,15 +49,6 @@ struct IslandTabView: View {
                         focusPandoraPulse: $focusPandoraPulse
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-                } else if selectedTab == .settings {
-                    IslandSettingsView(
-                        keyboardMonitor: keyboardMonitor,
-                        permissions: permissions,
-                        musicManager: musicManager,
-                        musicControlSlotsData: $musicControlSlotsData,
-                        focusPandoraMinutes: focusPandoraMinutes
-                    )
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .top)
@@ -67,6 +57,7 @@ struct IslandTabView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear {
             if IslandTab(rawValue: selectedTabRaw) == nil {
+                // Includes legacy "Settings" value when settings lived in the island.
                 DispatchQueue.main.async {
                     selectedTabRaw = IslandTab.media.rawValue
                 }
@@ -75,6 +66,11 @@ struct IslandTabView: View {
         .onChange(of: selectedTabRaw) { _, new in
             if new != IslandTab.tasks.rawValue, isComposingTask {
                 isComposingTask = false
+            }
+        }
+        .onChange(of: focusPandoraMinutes) { _, new in
+            if !focusPandoraIsRunning {
+                focusPandoraRemainingSec = new * 60
             }
         }
     }
@@ -101,7 +97,7 @@ struct IslandTabView: View {
     private var tabBarView: some View {
         HStack(spacing: 0) {
             HStack(spacing: 0) {
-                ForEach(IslandTab.allCases.filter { $0 != .settings }, id: \.self) { tab in
+                ForEach(IslandTab.allCases, id: \.self) { tab in
                     tabIconButton(tab)
                 }
             }
@@ -109,12 +105,25 @@ struct IslandTabView: View {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 0) {
-                tabIconButton(.settings)
-            }
-            .clipShape(Capsule())
+            settingsGearButton
         }
         .frame(maxWidth: .infinity, minHeight: 26, maxHeight: 26, alignment: .leading)
+    }
+
+    private var settingsGearButton: some View {
+        Button {
+            onOpenSettings()
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 12, weight: .regular))
+                .symbolRenderingMode(.hierarchical)
+                .padding(.horizontal, 13)
+                .frame(height: 26)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.white.opacity(0.38))
+        .accessibilityLabel("Open Settings")
     }
 
     private func tabIconButton(_ tab: IslandTab) -> some View {

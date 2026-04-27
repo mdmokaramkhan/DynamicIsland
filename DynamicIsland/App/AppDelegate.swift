@@ -32,6 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Onboarding window — retained until the user dismisses it.
     private var onboardingWindow: NSWindow?
 
+    private var settingsWindowManager: SettingsWindowManager?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon, no app-switcher entry — this is a pure overlay.
         NSApp.setActivationPolicy(.accessory)
@@ -39,6 +41,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Pre-warm MusicManager singleton so its controller observers start
         // listening immediately (no crash: singleton is created before any view).
         _ = MusicManager.shared
+
+        settingsWindowManager = SettingsWindowManager(activationPolicyOnClose: { [weak self] in
+            self?.restoreAccessoryActivationIfAppropriate()
+        })
 
         installStatusItem()
         installPanel()
@@ -125,7 +131,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func dismissPermissionOnboarding() {
         onboardingWindow?.close()
         onboardingWindow = nil
-        // Back to accessory (no Dock icon) after the user dismisses the dialog.
+        restoreAccessoryActivationIfAppropriate()
+    }
+
+    /// Returns to an accessory (menu-only) app when no window needs a regular activation policy.
+    @MainActor
+    private func restoreAccessoryActivationIfAppropriate() {
+        if onboardingWindow != nil { return }
+        if settingsWindowManager?.isWindowOpen() == true { return }
         NSApp.setActivationPolicy(.accessory)
     }
 
@@ -242,6 +255,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         // ── App section ──────────────────────────────────────────────────
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettingsFromMenu),
+            keyEquivalent: ","
+        )
+        settingsItem.keyEquivalentModifierMask = .command
+        settingsItem.image = makeMenuIcon(symbol: "gearshape")
+        menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(
             title: "Quit DynamicIsland",
             action: #selector(quitApp),
@@ -271,8 +295,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyboardMonitor: keyboardMonitor,
             keystrokeStore: keystrokeStore,
             musicManager: MusicManager.shared,
-            hitState: hitState
+            hitState: hitState,
+            onOpenSettings: { [weak self] in self?.openSettingsWindow() }
         ))
+        // Do not let hosted SwiftUI report preferred/intrinsic window sizing;
+        // with a borderless NSPanel that would fight AppKit and trigger
+        // “Update Constraints in Window” recursion during layout.
+        host.sizingOptions = []
         host.frame = NSRect(origin: .zero, size: IslandMetrics.panelSize)
         host.autoresizingMask = [.width, .height]
 
@@ -291,6 +320,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // cursor enters the pill area and disables it when it leaves.
         startMouseTracking()
         updatePanelMouseIgnore()
+    }
+
+    @MainActor
+    private func openSettingsWindow() {
+        settingsWindowManager?.show(keyboardMonitor: keyboardMonitor)
     }
 
     // MARK: - Click-through mouse tracking
@@ -320,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let over = pillScreenRect()?.contains(NSEvent.mouseLocation) ?? false
         // Full window must accept events only while the hover-expanded panel is up.
         // Compact strip / idle use a small top-centered rect so the rest of the
-        // 640×400 panel stays click-through.
+        // The full panel frame stays click-through except the compact hit rect.
         let shouldIgnore = !over && !hitState.isHoverExpanded
         if panel.ignoresMouseEvents != shouldIgnore {
             panel.ignoresMouseEvents = shouldIgnore
@@ -377,6 +411,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.refreshIslandPanelPresentation()
         }
+    }
+
+    @objc private func openSettingsFromMenu() {
+        openSettingsWindow()
     }
 
     @objc private func quitApp() {

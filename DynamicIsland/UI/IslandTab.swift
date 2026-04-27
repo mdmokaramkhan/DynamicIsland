@@ -9,14 +9,12 @@ enum IslandTab: String, CaseIterable {
     case media = "Now Playing"
     case tasks = "Tasks"
     case focusPandora = "Focus"
-    case settings = "Settings"
 
     var icon: String {
         switch self {
         case .media: return "music.note"
         case .tasks: return "checkmark.circle"
         case .focusPandora: return "hourglass"
-        case .settings: return "gearshape"
         }
     }
 }
