@@ -7,16 +7,16 @@
 //    • idle / keystroke  → fixed (compact pill)
 //    • hover-expanded    → content-driven (island grows to fit)
 //
-//  Interaction model mirrors boringNotch:
-//    • Hover enter → 150 ms wait → expand  (Task-debounced)
-//    • Hover exit  → 100 ms wait → collapse (Task-debounced)
-//    • Haptic feedback on hover enter when idle
-//    • Open  animation: .spring(.bouncy(0.4)) / timingCurve fallback
-//    • Close animation: overdamped spring (no bounce on collapse)
-//    • Drop shadow only while expanded
+//  The NotchShape is used as a .background so SwiftUI sizes it to
+//  match the content, not the other way around.
 //
-//  The idle pill is strictly 190×30 — no transparent spacer, so the
-//  black notch shape is exactly the pill height with nothing above it.
+//  Keystroke strip (288pt): while music is playing, album + equaliser; when a
+//  recent keystroke is shown, the row cross-fades to frontmost app + chip.
+//  Full Now Playing remains in the hover-expanded tab panel.
+//
+//  Expanded (hover) interaction: debounced open/close, haptic on open from idle,
+//  bouncy open / damped close springs, and shadow — aligned with the boringNotch
+//  reference. Idle pill stays 190×30 with no empty spacer above the shape.
 //
 
 import SwiftUI
@@ -28,84 +28,98 @@ struct DynamicIslandView: View {
         case keystrokeExpanded
     }
 
-    // ── Sizes ────────────────────────────────────────────────────────────────
+    // Collapsed + keystroke — compact sizes
     private let collapsedSize = CGSize(width: 190, height: 30)
+    // closed: top = 6, bottom = 14 (boringNotch / cornerRadiusInsets)
+    private let collapsedTopRadius: CGFloat = 6
+    private let collapsedBottomRadius: CGFloat = 14
+
     private let keystrokeWidth: CGFloat = 288
     private let keystrokeContentHeight: CGFloat = 20
-    // Open width — boringNotch openNotchSize.width = 640
+
+    // Matches IslandMetrics.panelSize.width and boringNotch openNotchSize
     private let hoverExpandedWidth: CGFloat = 640
-    // Inner safe area for expanded content. This keeps the UI away from the
-    // curved notch border without adding an empty black spacer in idle state.
+
+    // Safe inset for tab content; keeps UI off the curved notch border
     private let expandedContentInset = EdgeInsets(top: 8, leading: 30, bottom: 24, trailing: 30)
 
-    // ── Radii — boringNotch cornerRadiusInsets ───────────────────────────────
-    // closed:  top = 6,  bottom = 14
-    // opened:  top = 19, bottom = 24
-    private let collapsedTopRadius: CGFloat     = 6
-    private let collapsedBottomRadius: CGFloat  = 14
-    private let expandedTopRadius: CGFloat      = 19
-    private let expandedBottomRadius: CGFloat   = 24
-    private let keystrokePillTopRadius: CGFloat = 6
-    private let keystrokePillBottomRadius: CGFloat = 14
+    // opened: top = 19, bottom = 24
+    private let expandedTopRadius: CGFloat = 19
+    private let expandedBottomRadius: CGFloat = 24
 
-    // ── Animations ── mirrors boringNotch BoringAnimations + ContentView ─────
-    // Open: bouncy spring (macOS 14+) or custom timing curve
+    // Keystroke strip — capsule-like, tuned for a short height
+    private let keystrokePillTopRadius: CGFloat = 5
+    private let keystrokePillBottomRadius: CGFloat = 18
+
     private var openAnimation: Animation {
         if #available(macOS 14.0, *) {
             return .spring(.bouncy(duration: 0.4))
         }
         return .timingCurve(0.16, 1, 0.3, 1, duration: 0.7)
     }
-    // Close: overdamped spring — no bounce when collapsing
     private let closeAnimation = Animation.spring(
         response: 0.45, dampingFraction: 1.0, blendDuration: 0
     )
+    /// Fade in / out the compact strip (music + keystroke) so the player never “pops” with scale.
+    private let stripContentFade = Animation.easeInOut(duration: 0.32)
 
     private let inputExpansionDuration: TimeInterval = 1.5
-    // Minimum hover dwell before expanding (ms) — like Defaults[.minimumHoverDuration]
-    private let hoverOpenDelay: UInt64 = 150_000_000   // 150 ms
-    // Debounce before collapsing on hover exit
-    private let hoverCloseDelay: UInt64 = 100_000_000  // 100 ms
+    private let hoverOpenDelay: UInt64 = 150_000_000
+    private let hoverCloseDelay: UInt64 = 100_000_000
 
-    // ── External state ────────────────────────────────────────────────────────
     @ObservedObject var keyboardMonitor: GlobalKeystrokeMonitor
     @ObservedObject var keystrokeStore: KeystrokePanelStore
+    @ObservedObject var musicManager: MusicManager
     let hitState: IslandHitState
 
-    // Mirror IslandTabView's persisted tab so the pill animates its height on tab switch
-    @AppStorage("island.selectedTab") private var selectedTabRaw: String = IslandTab.welcome.rawValue
+    @AppStorage("island.selectedTab") private var selectedTabRaw: String = IslandTab.media.rawValue
 
-    // ── Internal state ────────────────────────────────────────────────────────
     @State private var isHovering = false
     @State private var isExpandedByInput = false
     @State private var isComposingTask = false
     @State private var displayMode: DisplayMode = .idle
     @State private var collapseWorkItem: DispatchWorkItem?
-    // Async task handle for debounced hover open/close
+    @State private var keyNoteExpiryWorkItem: DispatchWorkItem?
+    /// Bumps when the keystroke “note” TTL ends so `visibleKeystrokeToken` is re-evaluated (time alone does not redraw).
+    @State private var keyNoteDisplayTick: UInt = 0
     @State private var hoverTask: Task<Void, Never>?
-    // Toggle to trigger haptic on hover-enter while idle
     @State private var hapticTrigger: Bool = false
-
-    // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
             islandPill
-                .onHover { hovering in handleHover(hovering) }
-                .onChange(of: keystrokeStore.lastKeystrokeToken) { updatedToken in
-                    guard updatedToken != nil else { return }
+                .onHover { handleHover($0) }
+                .onChange(of: keystrokeStore.lastKeystrokeToken) { _ in
+                    guard keystrokeStore.lastKeystrokeToken != nil else { return }
                     triggerInputExpansion()
                 }
                 .onDisappear {
                     hoverTask?.cancel()
                     collapseWorkItem?.cancel()
                     collapseWorkItem = nil
+                    keyNoteExpiryWorkItem?.cancel()
+                    keyNoteExpiryWorkItem = nil
                 }
                 .sensoryFeedback(.alignment, trigger: hapticTrigger)
 
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear {
+            recalculateDisplayMode()
+            scheduleKeyNoteExpiryRefreshIfNeeded()
+        }
+        .onChange(of: keystrokeStore.lastKeystrokeAt) { _, new in
+            if new != nil {
+                scheduleKeyNoteExpiryRefresh()
+            } else {
+                keyNoteExpiryWorkItem?.cancel()
+                keyNoteExpiryWorkItem = nil
+            }
+        }
+        .onChange(of: musicManager.isPlaying) { _, _ in
+            withAnimation(stripContentFade) { recalculateDisplayMode() }
+        }
         .onChange(of: isComposingTask) { _, _ in
             withAnimation(isComposingTask ? openAnimation : closeAnimation) {
                 recalculateDisplayMode()
@@ -118,14 +132,16 @@ struct DynamicIslandView: View {
     @ViewBuilder
     private var islandPill: some View {
         VStack(spacing: 0) {
-            // No transparent spacer here — the idle pill must be exactly
-            // collapsedSize.height with no empty black region above content.
-            // The notchAreaTopPad is applied as padding inside the content.
-            if displayMode != .idle {
+            if displayMode == .keystrokeExpanded {
+                islandModeContent
+                    .transition(.opacity)
+            } else if displayMode == .hoverExpanded {
                 islandModeContent
                     .transition(
-                        .scale(scale: 0.85, anchor: .top)
-                        .combined(with: .opacity)
+                        .asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)),
+                            removal: .opacity
+                        )
                     )
             }
         }
@@ -140,22 +156,26 @@ struct DynamicIslandView: View {
         .clipShape(
             NotchShape(topRadius: currentTopRadius, bottomRadius: currentBottomRadius)
         )
-        // Elevation shadow — only while expanded (matches boringNotch .shadow on open)
         .shadow(
             color: displayMode != .idle ? Color.black.opacity(0.65) : .clear,
             radius: 8, x: 0, y: 5
         )
-        .animation(displayMode == .idle ? closeAnimation : openAnimation, value: displayMode)
-        // Animate island height when tab content changes height
+        // Idle and compact strip share the same ease; hover keeps the bouncy open spring.
+        .animation(modeChangeAnimation, value: displayMode)
         .animation(.smooth(duration: 0.32), value: selectedTabRaw)
     }
 
-    // MARK: - Mode content
+    private var modeChangeAnimation: Animation {
+        switch displayMode {
+        case .idle, .keystrokeExpanded: stripContentFade
+        case .hoverExpanded: openAnimation
+        }
+    }
 
     @ViewBuilder
     private var islandModeContent: some View {
-        if displayMode == .keystrokeExpanded, let token = visibleKeystrokeToken {
-            keystrokePanel(token: token)
+        if displayMode == .keystrokeExpanded {
+            compactKeystrokeStrip
                 .frame(height: keystrokeContentHeight)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -182,15 +202,81 @@ struct DynamicIslandView: View {
         }
     }
 
-    // MARK: - Keystroke panel
+    // MARK: - Compact strip (music + keystroke, animated)
 
-    private func keystrokePanel(token: KeystrokeToken) -> some View {
-        HStack(spacing: 0) {
-            appIconView
+    /// True when a recent key event should show app + note instead of album + music animation.
+    private var showKeyNoteInStrip: Bool {
+        visibleKeystrokeToken != nil
+    }
+
+    /// Drives cross-fade between “music” and “keystroke” row layouts.
+    private var compactStripContentSignature: String {
+        let tid = visibleKeystrokeToken.map { $0.id.uuidString } ?? ""
+        return "\(keyNoteDisplayTick)-\(showKeyNoteInStrip)-\(tid)-\(musicManager.isPlaying)"
+    }
+
+    private var compactKeystrokeStrip: some View {
+        let tint = Color(nsColor: musicManager.avgColor)
+        let showKey = showKeyNoteInStrip
+        return HStack(spacing: 0) {
+            if showKey {
+                appIconView
+            } else {
+                musicAlbumLeading(tint: tint)
+            }
             Spacer(minLength: 8)
-            KeystrokeChipView(token: token)
+            if showKey, let token = visibleKeystrokeToken {
+                KeystrokeChipView(token: token)
+            } else if musicManager.isPlaying {
+                musicPlayingIndicator(tint: tint)
+            } else {
+                Color.clear.frame(width: 1, height: keystrokeContentHeight)
+            }
         }
         .frame(maxWidth: .infinity)
+        .animation(stripContentFade, value: compactStripContentSignature)
+    }
+
+    private func musicAlbumLeading(tint: Color) -> some View {
+        Button { musicManager.openMusicApp() } label: {
+            Image(nsImage: musicManager.albumArt)
+                .resizable()
+                .aspectRatio(1, contentMode: .fill)
+                .frame(width: 20, height: 20)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(tint.opacity(0.35), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func musicPlayingIndicator(tint: Color) -> some View {
+        let spectrumSize = AudioSpectrumView.contentSize
+        // Native layout is many slim bars; mild scale (vs 3.2×) so it eases in softly after the chip.
+        return LinearGradient(
+            colors: [
+                tint.opacity(0.95),
+                tint.opacity(0.45),
+                Color.white.opacity(0.9),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+        .frame(width: 24, height: 24)
+        .mask {
+            AudioSpectrumView(isPlaying: musicPlayingIndicatorBinding)
+                .frame(width: spectrumSize.width, height: spectrumSize.height)
+                .scaleEffect(x: 1.85, y: 1.32, anchor: .center)
+        }
+    }
+
+    private var musicPlayingIndicatorBinding: Binding<Bool> {
+        Binding(
+            get: { musicManager.isPlaying },
+            set: { _ in }
+        )
     }
 
     @ViewBuilder
@@ -213,52 +299,50 @@ struct DynamicIslandView: View {
 
     private var currentWidth: CGFloat {
         switch displayMode {
-        case .idle:               return collapsedSize.width
-        case .hoverExpanded:      return hoverExpandedWidth
-        case .keystrokeExpanded:  return keystrokeWidth
+        case .idle:              return collapsedSize.width
+        case .hoverExpanded:     return hoverExpandedWidth
+        case .keystrokeExpanded: return keystrokeWidth
         }
     }
 
     private var currentTopRadius: CGFloat {
         switch displayMode {
-        case .idle:                return collapsedTopRadius
-        case .hoverExpanded:       return expandedTopRadius
-        case .keystrokeExpanded:   return keystrokePillTopRadius
+        case .idle:              return collapsedTopRadius
+        case .hoverExpanded:     return expandedTopRadius
+        case .keystrokeExpanded: return keystrokePillTopRadius
         }
     }
 
     private var currentBottomRadius: CGFloat {
         switch displayMode {
-        case .idle:                return collapsedBottomRadius
-        case .hoverExpanded:       return expandedBottomRadius
-        case .keystrokeExpanded:   return keystrokePillBottomRadius
+        case .idle:              return collapsedBottomRadius
+        case .hoverExpanded:     return expandedBottomRadius
+        case .keystrokeExpanded: return keystrokePillBottomRadius
         }
     }
 
-    // MARK: - Hover interaction (mirrors boringNotch handleHover)
+    // MARK: - Hover
 
     private func handleHover(_ hovering: Bool) {
         hoverTask?.cancel()
 
         if hovering {
-            // Immediately register hover for visual feedback
             withAnimation(openAnimation) { isHovering = true }
 
-            // Fire haptic when cursor enters the closed pill
             if displayMode == .idle { hapticTrigger.toggle() }
 
-            // Only open after the dwell delay and only from idle
-            guard displayMode == .idle else { return }
+            guard displayMode == .idle || displayMode == .keystrokeExpanded else { return }
             hoverTask = Task {
                 try? await Task.sleep(nanoseconds: hoverOpenDelay)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
-                    guard self.isHovering, self.displayMode == .idle else { return }
+                    guard self.isHovering,
+                          self.displayMode == .idle || self.displayMode == .keystrokeExpanded
+                    else { return }
                     withAnimation(self.openAnimation) { self.recalculateDisplayMode() }
                 }
             }
         } else {
-            // Debounce collapse so brief mouse-out flickers don't close the panel
             hoverTask = Task {
                 try? await Task.sleep(nanoseconds: hoverCloseDelay)
                 guard !Task.isCancelled else { return }
@@ -275,23 +359,62 @@ struct DynamicIslandView: View {
     // MARK: - Keystroke expansion
 
     private var visibleKeystrokeToken: KeystrokeToken? {
+        _ = keyNoteDisplayTick
         guard let token = keystrokeStore.lastKeystrokeToken,
-              let lastKeystrokeAt = keystrokeStore.lastKeystrokeAt else { return nil }
+              let lastKeystrokeAt = keystrokeStore.lastKeystrokeAt else {
+            return nil
+        }
         let age = Date().timeIntervalSince(lastKeystrokeAt)
         return age <= inputExpansionDuration ? token : nil
     }
 
-    private func triggerInputExpansion() {
-        guard displayMode == .idle else { return }
+    /// When the 1.5s “note” window ends, the view must refresh — `Date()`-based checks do not auto-invalidate.
+    private func scheduleKeyNoteExpiryRefresh() {
+        keyNoteExpiryWorkItem?.cancel()
+        guard keystrokeStore.lastKeystrokeAt != nil else { return }
+        let w = DispatchWorkItem { [self] in
+            withAnimation(stripContentFade) {
+                keyNoteDisplayTick &+= 1
+                recalculateDisplayMode()
+            }
+        }
+        keyNoteExpiryWorkItem = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + inputExpansionDuration, execute: w)
+    }
 
-        withAnimation(openAnimation) {
+    private func scheduleKeyNoteExpiryRefreshIfNeeded() {
+        keyNoteExpiryWorkItem?.cancel()
+        guard let t = keystrokeStore.lastKeystrokeAt else { return }
+        let age = Date().timeIntervalSince(t)
+        if age >= inputExpansionDuration {
+            withAnimation(stripContentFade) {
+                keyNoteDisplayTick &+= 1
+                recalculateDisplayMode()
+            }
+            return
+        }
+        let remain = inputExpansionDuration - age
+        let w = DispatchWorkItem { [self] in
+            withAnimation(stripContentFade) {
+                keyNoteDisplayTick &+= 1
+                recalculateDisplayMode()
+            }
+        }
+        keyNoteExpiryWorkItem = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + remain, execute: w)
+    }
+
+    private func triggerInputExpansion() {
+        guard displayMode == .idle || displayMode == .keystrokeExpanded else { return }
+
+        withAnimation(stripContentFade) {
             isExpandedByInput = true
             recalculateDisplayMode()
         }
 
         collapseWorkItem?.cancel()
         let workItem = DispatchWorkItem { [self] in
-            withAnimation(closeAnimation) {
+            withAnimation(stripContentFade) {
                 isExpandedByInput = false
                 recalculateDisplayMode()
             }
@@ -307,12 +430,27 @@ struct DynamicIslandView: View {
             displayMode = .hoverExpanded
         } else if isHovering {
             displayMode = .hoverExpanded
-        } else if isExpandedByInput {
+        } else if isExpandedByInput
+            || visibleKeystrokeToken != nil
+            || musicManager.isPlaying
+        {
             displayMode = .keystrokeExpanded
         } else {
             displayMode = .idle
         }
-        hitState.isExpanded = displayMode != .idle
+        hitState.isHoverExpanded = displayMode == .hoverExpanded
+        switch displayMode {
+        case .idle:
+            hitState.compactHitSize = collapsedSize
+        case .keystrokeExpanded:
+            // Matches compact strip: vertical padding 8+8 plus content height.
+            hitState.compactHitSize = CGSize(
+                width: keystrokeWidth,
+                height: keystrokeContentHeight + 16
+            )
+        case .hoverExpanded:
+            break
+        }
     }
 }
 
@@ -320,6 +458,7 @@ struct DynamicIslandView: View {
     DynamicIslandView(
         keyboardMonitor: GlobalKeystrokeMonitor(),
         keystrokeStore: KeystrokePanelStore(),
+        musicManager: MusicManager.shared,
         hitState: IslandHitState()
     )
     .frame(width: 680, height: 400)

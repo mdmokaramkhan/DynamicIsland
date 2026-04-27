@@ -25,10 +25,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let soundPlayer = KeystrokeSoundPlayer()
     private let hitState = IslandHitState()
     private var mouseMonitor: Any?
+    /// When global mouse monitoring is unavailable (no Accessibility), poll so
+    /// `ignoresMouseEvents` still updates as the cursor moves.
+    private var mousePollTimer: Timer?
+
+    // Onboarding window — retained until the user dismisses it.
+    private var onboardingWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // No Dock icon, no app-switcher entry — this is a pure overlay.
         NSApp.setActivationPolicy(.accessory)
+
+        // Pre-warm MusicManager singleton so its controller observers start
+        // listening immediately (no crash: singleton is created before any view).
+        _ = MusicManager.shared
 
         installStatusItem()
         installPanel()
@@ -45,15 +55,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+
+        // Space (desktop) switches do not post didChangeScreenParameters; without a
+        // follow-up orderFront, the panel can end up hidden behind the transition.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(activeSpaceDidChange(_:)),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
+
+        // Check permissions and show onboarding dialog when needed.
+        Task { @MainActor in
+            let pm = PermissionManager.shared
+            pm.checkAll()
+            // Show on first launch OR whenever Accessibility is missing.
+            if !pm.isOnboardingComplete || pm.accessibilityMissing {
+                self.showPermissionOnboarding()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         keyboardMonitor.stop()
         keyboardMonitor.onEvent = nil
         if let monitor = mouseMonitor {
             NSEvent.removeMonitor(monitor)
+            mouseMonitor = nil
         }
+        mousePollTimer?.invalidate()
+        mousePollTimer = nil
+    }
+
+    // MARK: - Permission onboarding window
+
+    @MainActor
+    private func showPermissionOnboarding() {
+        guard onboardingWindow == nil else { return }
+
+        // Temporarily become a regular app so the window can be focused/key.
+        NSApp.setActivationPolicy(.regular)
+
+        let view = PermissionOnboardingView { [weak self] in
+            self?.dismissPermissionOnboarding()
+        }
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 560)
+
+        let window = NSWindow(contentViewController: controller)
+        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.setContentSize(NSSize(width: 500, height: 560))
+        window.center()
+        window.level = .floating
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        onboardingWindow = window
+    }
+
+    @MainActor
+    private func dismissPermissionOnboarding() {
+        onboardingWindow?.close()
+        onboardingWindow = nil
+        // Back to accessory (no Dock icon) after the user dismisses the dialog.
+        NSApp.setActivationPolicy(.accessory)
     }
 
     // MARK: - Panel setup
@@ -111,6 +184,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
         accessibilityItem.image = makeMenuIcon(symbol: "hand.raised")
         menu.addItem(accessibilityItem)
+        menu.addItem(.separator())
+
+        // ── Media section ─────────────────────────────────────────────────
+        menu.addItem(makeSectionHeader("Media"))
+
+        let automationItem = NSMenuItem(
+            title: "Automation Settings",
+            action: #selector(openAutomationSettings),
+            keyEquivalent: ""
+        )
+        automationItem.image = makeMenuIcon(symbol: "music.note")
+        menu.addItem(automationItem)
         menu.addItem(.separator())
 
         // ── Sounds section ───────────────────────────────────────────────
@@ -185,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let host = NSHostingView(rootView: DynamicIslandView(
             keyboardMonitor: keyboardMonitor,
             keystrokeStore: keystrokeStore,
+            musicManager: MusicManager.shared,
             hitState: hitState
         ))
         host.frame = NSRect(origin: .zero, size: IslandMetrics.panelSize)
@@ -193,15 +279,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let panel = IslandPanel.make(contentView: host)
         self.panel = panel
 
-        if let screen = targetScreen() {
-            panel.reposition(on: screen)
-        }
-
-        panel.orderFrontRegardless()
+        refreshIslandPanelPresentation()
 
         // When SwiftUI signals that the island has collapsed back to idle,
         // re-evaluate whether the panel should ignore mouse events.
-        hitState.onExpansionChanged = { [weak self] _ in
+        hitState.onMousePolicyChanged = { [weak self] in
             self?.updatePanelMouseIgnore()
         }
 
@@ -218,8 +300,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func pillScreenRect() -> NSRect? {
         guard let panel else { return nil }
         let f = panel.frame
-        let pw = IslandMetrics.collapsedSize.width
-        let ph = IslandMetrics.collapsedSize.height
+        let sz = hitState.compactHitSize
+        let pw = sz.width
+        let ph = sz.height
         // Add a small inset buffer so hover triggers slightly before
         // the cursor reaches the exact pill edge.
         return NSRect(
@@ -235,19 +318,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updatePanelMouseIgnore() {
         guard let panel else { return }
         let over = pillScreenRect()?.contains(NSEvent.mouseLocation) ?? false
-        // Never ignore events while expanded — doing so would prevent
-        // onHover(false) from firing and would freeze the island open.
-        let shouldIgnore = !over && !hitState.isExpanded
+        // Full window must accept events only while the hover-expanded panel is up.
+        // Compact strip / idle use a small top-centered rect so the rest of the
+        // 640×400 panel stays click-through.
+        let shouldIgnore = !over && !hitState.isHoverExpanded
         if panel.ignoresMouseEvents != shouldIgnore {
             panel.ignoresMouseEvents = shouldIgnore
         }
     }
 
     private func startMouseTracking() {
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
-        ) { [weak self] _ in
+        let mask: NSEvent.EventTypeMask = [
+            .mouseMoved,
+            .leftMouseDragged,
+            .rightMouseDragged,
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown,
+        ]
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
             self?.updatePanelMouseIgnore()
+        }
+
+        if mouseMonitor == nil {
+            mousePollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+                self?.updatePanelMouseIgnore()
+            }
         }
     }
 
@@ -258,11 +354,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSScreen.main ?? NSScreen.screens.first
     }
 
-    // MARK: - Screen changes
+    // MARK: - Screen & Space changes
+
+    /// Keeps the island visible and correctly placed after display changes or
+    /// Mission Control / Space switches (which do not always fire screen-params).
+    private func refreshIslandPanelPresentation() {
+        guard let panel else { return }
+        if let screen = targetScreen() {
+            panel.reposition(on: screen)
+        }
+        panel.orderFrontRegardless()
+        updatePanelMouseIgnore()
+    }
 
     @objc private func screenParametersChanged(_ note: Notification) {
-        guard let panel, let screen = targetScreen() else { return }
-        panel.reposition(on: screen)
+        refreshIslandPanelPresentation()
+    }
+
+    @objc private func activeSpaceDidChange(_ note: Notification) {
+        refreshIslandPanelPresentation()
+        // Window server may reorder once more after the transition animation.
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshIslandPanelPresentation()
+        }
     }
 
     @objc private func quitApp() {
@@ -271,6 +385,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openAccessibilitySettings() {
         keyboardMonitor.openAccessibilitySettings()
+    }
+
+    @objc private func openAutomationSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func updateStatusMenuTitle() {

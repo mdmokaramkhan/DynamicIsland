@@ -29,15 +29,31 @@ enum IslandMetrics {
 /// change. AppDelegate observes via the callback to toggle the panel's
 /// `ignoresMouseEvents` — the only compositor-level way to allow clicks to
 /// fall through a transparent overlay window to the apps beneath it.
+/// Only the hover-expanded tab panel uses the full window hit area; idle and
+/// compact strip constrain hits to `compactHitSize` at the top center.
 final class IslandHitState {
-    var isExpanded: Bool = false {
+    /// True only for the hover-opened tab panel. That mode needs the full window
+    /// to receive mouse events (controls + reliable `onHover(false)` to collapse).
+    /// Compact idle / keystroke strip must stay click-through outside the pill.
+    var isHoverExpanded: Bool = false {
         didSet {
-            guard isExpanded != oldValue else { return }
-            onExpansionChanged?(isExpanded)
+            guard isHoverExpanded != oldValue else { return }
+            notifyMousePolicyChanged()
         }
     }
-    /// Called on the main thread whenever `isExpanded` flips.
-    var onExpansionChanged: ((Bool) -> Void)?
+    /// Centered hit target at the top of the panel when not hover-expanded.
+    var compactHitSize: CGSize = IslandMetrics.collapsedSize {
+        didSet {
+            guard compactHitSize != oldValue else { return }
+            notifyMousePolicyChanged()
+        }
+    }
+    /// Called when hover-expanded or compact hit metrics change.
+    var onMousePolicyChanged: (() -> Void)?
+
+    private func notifyMousePolicyChanged() {
+        onMousePolicyChanged?()
+    }
 }
 
 // MARK: - Panel
@@ -67,6 +83,7 @@ final class IslandPanel: NSPanel {
         panel.isMovable = false
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
+        panel.isRestorable = false
         // Start fully click-through; AppDelegate's mouse monitor re-enables
         // interaction only when the cursor enters the collapsed pill area.
         panel.ignoresMouseEvents = true
